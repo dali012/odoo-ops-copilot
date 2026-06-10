@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+/* Geist design tokens */
+:root {
+  --ds-background-100: #000000;
+  --ds-background-200: #0a0a0a;
+  --ds-gray-100: #111111;
+  --ds-gray-200: #1a1a1a;
+  --ds-gray-700: #888888;
+  --ds-gray-800: #999999;
+  --ds-gray-900: #ededed;
+  --ds-gray-1000: #ffffff;
+  --ds-border: rgba(255, 255, 255, 0.1);
+  --ds-border-strong: rgba(255, 255, 255, 0.15);
+  --ds-blue-400: #0070f3;
+  --ds-green-400: #50e3c2;
+  --ds-amber-400: #f5a623;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--ds-background-200);
+  color: var(--ds-gray-900);
+}
+
+.assistant-markdown-p {
+  margin: 0 0 8px;
+}
+
+.assistant-markdown-p:last-child {
+  margin-bottom: 0;
+}
+
+.assistant-markdown-list {
+  margin: 6px 0 8px;
+  padding-left: 18px;
+}
+
+.assistant-markdown-li {
+  margin: 2px 0;
+}
+
+.assistant-markdown-table-wrap {
+  background: var(--ds-background-100);
+  border: 1px solid var(--ds-border-strong);
+  border-radius: 8px;
+  margin: 10px 0 12px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.assistant-markdown-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  min-width: 100%;
+  table-layout: auto;
+  width: 100%;
+}
+
+.assistant-markdown-thead {
+  background: var(--ds-gray-200);
+}
+
+.assistant-markdown-th,
+.assistant-markdown-td {
+  border-bottom: 1px solid var(--ds-border);
+  border-right: 1px solid var(--ds-border);
+  min-width: 112px;
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.assistant-markdown-th {
+  color: var(--ds-gray-1000);
+  font-weight: 650;
+}
+
+.assistant-markdown-td {
+  color: var(--ds-gray-900);
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-markdown-th:first-child,
+.assistant-markdown-td:first-child {
+  min-width: 160px;
+}
+
+.assistant-markdown-th:last-child,
+.assistant-markdown-td:last-child {
+  border-right: 0;
+}
+
+.assistant-markdown-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.assistant-markdown-table tr:last-child .assistant-markdown-td {
+  border-bottom: 0;
+}
+
+.assistant-markdown-strong {
+  color: var(--ds-gray-1000);
+  font-weight: 650;
+}
+
+.assistant-markdown-code {
+  background: var(--ds-background-100);
+  border: 1px solid var(--ds-border);
+  border-radius: 4px;
+  color: var(--ds-green-400);
+  font-family: var(--font-geist-mono);
+  font-size: 0.92em;
+  padding: 1px 4px;
+}
+
+.assistant-markdown-link {
+  color: var(--ds-blue-400);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-led {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--ds-gray-100) 25%,
+    var(--ds-gray-200) 50%,
+    var(--ds-gray-100) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+
+.rail-drawer {
+  transition: transform 200ms ease;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

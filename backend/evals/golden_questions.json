@@ -1,0 +1,44 @@
+[
+  {
+    "id": "active_product_count",
+    "question": "How many active products are in the catalog?",
+    "grader": "active_product_count",
+    "description": "Agent should answer the exact active product count."
+  },
+  {
+    "id": "outerwear_forecast_next_month",
+    "question": "Forecast Outerwear demand next month.",
+    "grader": "outerwear_forecast_next_month",
+    "description": "Agent should call the forecast tool and report the next-month Outerwear forecast."
+  },
+  {
+    "id": "top_category_units_90d",
+    "question": "Which product category sold the most units in the last 90 days?",
+    "grader": "top_category_units_90d",
+    "description": "Agent should identify the top category by units sold over the last 90 days."
+  },
+  {
+    "id": "slowest_products_90d",
+    "question": "Which are the three slowest-moving products over the last 90 days?",
+    "grader": "slowest_products_90d",
+    "description": "Agent should name the bottom three products by units sold over the last 90 days."
+  },
+  {
+    "id": "top_revenue_category_90d",
+    "question": "Which category generated the most revenue over the last 90 days?",
+    "grader": "top_revenue_category_90d",
+    "description": "Agent should identify the top category by revenue over the last 90 days."
+  },
+  {
+    "id": "schema_sales_by_category",
+    "question": "Before running a query, which Odoo SQL tables and join keys should be used to compute units sold by product category?",
+    "grader": "schema_sales_by_category",
+    "description": "Agent should name the correct Odoo sales and product-category join path."
+  },
+  {
+    "id": "schema_units_revenue_fields",
+    "question": "Which fields should be used for units sold, revenue, and order date in Odoo SQL analytics?",
+    "grader": "schema_units_revenue_fields",
+    "description": "Agent should identify product_uom_qty, price_unit, and date_order."
+  }
+]

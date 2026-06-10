@@ -1,0 +1,9 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+anthropic==0.40.*
+psycopg2-binary==2.9.*
+pandas==2.2.*
+statsmodels==0.14.*
+python-dotenv==1.0.*
+sqlalchemy==2.0.*
+sqlparse==0.5.*
