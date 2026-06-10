@@ -7,9 +7,7 @@ An AI operations copilot for a live Odoo ERP. It answers natural-language busine
 
 ---
 
-<video src="Odoo%20Ops%20Copilot%20-%20showcase.mp4" controls width="100%" title="Odoo Ops Copilot - tool trace visible in right rail">
-  <a href="Odoo%20Ops%20Copilot%20-%20showcase.mp4">Watch the Odoo Ops Copilot demo</a>
-</video>
+[Watch the Odoo Ops Copilot demo](./Odoo%20Ops%20Copilot%20-%20showcase.mp4)
 
 ---
 
