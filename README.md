@@ -7,9 +7,7 @@ An AI operations copilot for a live Odoo ERP. It answers natural-language busine
 
 ---
 
-<div style="position: relative; padding-bottom: 43.854166666666664%; height: 0;">
-  <iframe src="https://www.loom.com/embed/03563e7dd26e4097bd68f6601b2c9acc" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" title="Odoo Ops Copilot - tool trace visible in right rail"></iframe>
-</div>
+[Watch the Odoo Ops Copilot demo - tool trace visible in right rail](https://www.loom.com/share/03563e7dd26e4097bd68f6601b2c9acc)
 
 ---
 
