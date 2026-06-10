@@ -7,7 +7,7 @@ An AI operations copilot for a live Odoo ERP. It answers natural-language busine
 
 ---
 
-[Watch the Odoo Ops Copilot demo](./Odoo%20Ops%20Copilot%20-%20showcase.mp4)
+https://github.com/user-attachments/assets/ace18a8e-8f72-45f9-8acf-3e6f4c15bcbf
 
 ---
 
