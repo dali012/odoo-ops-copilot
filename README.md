@@ -2,7 +2,7 @@
 
 An AI operations copilot for a live Odoo ERP. It answers natural-language business questions, grounds the answer in Odoo data, forecasts demand, and can draft human-approved writebacks such as purchase orders, reorder rules, discounts, POS pricing changes, invoice follow-ups, email campaigns, and stock transfers.
 
-**Live demo:** _coming soon — deploying to VPS_  
+**Live demo:** _coming soon — deploying to VPS_
 **Eval pass rate:** 91 % on the golden-question suite (10/11 questions, run against the seeded database)
 
 ---
@@ -92,7 +92,6 @@ Approval-gated writeback proposal tools:
    ```
 
 2. Set `ANTHROPIC_API_KEY` in `.env`.
-
 3. Start all services:
 
    ```bash
@@ -100,7 +99,6 @@ Approval-gated writeback proposal tools:
    ```
 
 4. Open `http://localhost:8069`, create the `odoo_copilot` database, and install:
-
    - Sales, Inventory, Invoicing, Purchase, Point of Sale, Email Marketing
 
 5. Seed data and start the backend:
@@ -173,13 +171,6 @@ python -m app.seed --phase pos
 The agent can suggest operational changes, but it does not directly write to Odoo during normal reasoning. Writeback tools only create a pending proposal in `copilot.writeback_actions`. The backend writes to Odoo only when the user clicks Approve, and each approved action is recorded with the target Odoo model and record ids.
 
 On public deployments, set `DEMO_MODE=true` to return `403 Forbidden` on all approve/reject calls, so no visitor can mutate the demo Odoo instance.
-
-## Portfolio Talking Points
-
-- "I let an LLM write SQL, but only through a parser-backed allowlist, read-only transaction, timeout, and row cap."
-- "The agent has a golden-question eval suite with a measured 91 % pass rate — I can report a number instead of hoping the chatbot is right."
-- "Writebacks are approval-gated and auditable, turning analytics into an actual copilot workflow without giving the model unchecked ERP write access."
-- "The public demo sandboxes the write path via `DEMO_MODE` and resets its own data every 6 hours — I thought about what happens when strangers hit the write path."
 
 ## License
 
