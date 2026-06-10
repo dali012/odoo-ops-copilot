@@ -108,7 +108,7 @@ def init_session_store() -> None:
             )
         )
         conn.execute(text("ALTER TABLE copilot.writeback_actions ADD COLUMN IF NOT EXISTS decided_by TEXT"))
-        # Migrate: ensure action_type CHECK constraint covers all 8 types.
+        # Migrate: ensure action_type CHECK constraint covers all 11 types.
         old_constraint = conn.execute(
             text("""
                 SELECT constraint_name
@@ -134,7 +134,9 @@ def init_session_store() -> None:
                     'discount_rule', 'restock_rule',
                     'purchase_order', 'invoice_reminder',
                     'price_update', 'pos_pricelist',
-                    'email_campaign', 'transfer_stock'
+                    'email_campaign', 'transfer_stock',
+                    'inventory_adjustment', 'vendor_price_update',
+                    'sale_order_cancel'
                 ))
             """)
         )
