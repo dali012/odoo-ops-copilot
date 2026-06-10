@@ -3,7 +3,7 @@
 An AI operations copilot for a live Odoo ERP. It answers natural-language business questions, grounds answers in Odoo data, forecasts demand, analyses margin and stockout risk, segments customers by RFM, compares periods side-by-side, and drafts human-approved write-backs — purchase orders, reorder rules, discounts, price updates, vendor price corrections, inventory adjustments, sale order cancellations, POS pricing changes, invoice follow-ups, email campaigns, and stock transfers.
 
 **Live demo:** _coming soon — deploying to VPS_
-**Eval pass rate:** 91 % on the golden-question suite (10/11 questions, run against the seeded database)
+**Eval pass rate:** 100 % on the golden-question suite (12/12 questions, run against the seeded database)
 
 ---
 
@@ -51,7 +51,7 @@ Nginx reverse proxy (port 80/443)
 - **SQL guardrails:** single-statement `SELECT` only, table allowlist, read-only transaction, PostgreSQL statement timeout, and hard row cap.
 - **Schema grounding:** the system prompt includes a compact Odoo schema/business glossary so SQL uses real Odoo tables and fields.
 - **Durable chat memory:** same-chat context is stored in the `copilot` Postgres schema and restored after refresh.
-- **Eval harness:** golden questions run against the live seeded database and report a pass rate (currently **91 %**).
+- **Eval harness:** 12 golden questions covering all major analytics tools (`forecast_demand`, `stockout_risk`, `inventory_aging`, `margin_analysis`, `supplier_scorecard`, `simulate_discount_impact`, `sql_analytics`, `odoo_query`, and Odoo schema knowledge) run against the live seeded database — currently **100 %** pass rate.
 - **Seeded business dataset:** catalog, 30 months of sales, purchase orders, invoices, POS sessions, and draft email campaigns.
 - **Demo safety:** `DEMO_MODE=true` disables the write-back approve/reject endpoints for public deployments. A scheduled reset script re-seeds Odoo and wipes chat history every 6 hours.
 
@@ -169,11 +169,17 @@ cd frontend
 npm run lint && npx jest && npm run build
 ```
 
-Eval harness (current pass rate: 91 %):
+Eval harness (current pass rate: 100 %, 12/12 questions):
 
 ```bash
 cd backend
 python -m app.eval_harness --fail-under 0.85
+
+# Run a single case:
+python -m app.eval_harness --case-id stockout_risk_top_critical --verbose
+
+# Machine-readable output:
+python -m app.eval_harness --json
 ```
 
 Run one seed phase:

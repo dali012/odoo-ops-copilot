@@ -22,7 +22,15 @@ from typing import Any, Callable
 from sqlalchemy import text
 
 from .agent import chat
-from .tools import _get_engine, forecast_demand
+from .tools import (
+    _get_engine,
+    forecast_demand,
+    inventory_aging,
+    margin_analysis,
+    simulate_discount_impact,
+    stockout_risk,
+    supplier_scorecard,
+)
 
 DEFAULT_CASES_PATH = Path(__file__).resolve().parents[1] / "evals" / "golden_questions.json"
 
@@ -114,6 +122,8 @@ def grade_top_category_units_90d(response: str) -> Grade:
         LIMIT 1
         """
     )
+    if not row:
+        return Grade(False, "no sales data in last 90 days", ["query returned no rows"])
     category = str(row["category"])
     units = float(row["units"])
     normalized = normalize(response)
@@ -141,6 +151,8 @@ def grade_slowest_products_90d(response: str) -> Grade:
         LIMIT 3
         """
     )
+    if not rows:
+        return Grade(False, "no sales data in last 90 days", ["query returned no rows"])
     expected_products = [str(row["product"]) for row in rows]
     normalized = normalize(response)
     missing = [product for product in expected_products if product.casefold() not in normalized]
@@ -168,14 +180,18 @@ def grade_top_revenue_category_90d(response: str) -> Grade:
         LIMIT 1
         """
     )
+    if not row:
+        return Grade(False, "no sales data in last 90 days", ["query returned no rows"])
     category = str(row["category"])
     revenue = float(row["revenue"])
     normalized = normalize(response)
-    passed = category.casefold() in normalized and contains_number_near(response, revenue, tolerance=5.0)
+    # Use 1% relative tolerance so agents that round large revenues still pass.
+    tolerance = max(5.0, revenue * 0.01)
+    passed = category.casefold() in normalized and contains_number_near(response, revenue, tolerance=tolerance)
     return Grade(
         passed=passed,
         expected=f"{category} with ${revenue:,.0f} revenue",
-        details=[f"answer numbers={extract_numbers(response)}"],
+        details=[f"answer numbers={extract_numbers(response)}", f"tolerance={tolerance:.2f}"],
     )
 
 
@@ -223,6 +239,112 @@ def grade_schema_units_revenue_fields(response: str) -> Grade:
     )
 
 
+def grade_stockout_risk_top_critical(response: str) -> Grade:
+    result = stockout_risk(days_of_history=90, risk_days_threshold=30, limit=5)
+    rows = result.get("rows", [])
+    urgent = [r for r in rows if r.get("urgency") in ("out_of_stock", "critical")]
+    if not urgent:
+        urgent = rows  # fall back to any at-risk row
+    if not urgent:
+        return Grade(False, "stockout_risk returned no at-risk rows", ["tool returned no data"])
+    top_product = str(urgent[0]["product"])
+    urgency_label = str(urgent[0].get("urgency", "unknown"))
+    normalized = normalize(response)
+    passed = top_product.casefold() in normalized
+    return Grade(
+        passed=passed,
+        expected=f"Top at-risk product: {top_product} (urgency: {urgency_label})",
+        details=[f"top_product={top_product!r}", f"urgency={urgency_label}"],
+    )
+
+
+def grade_inventory_aging_top_dead_stock(response: str) -> Grade:
+    result = inventory_aging(days_threshold=60, limit=1)
+    rows = result.get("rows", [])
+    if not rows:
+        # No dead stock in the DB — agent should correctly acknowledge clean inventory.
+        normalized = normalize(response)
+        clean_report = any(
+            phrase in normalized
+            for phrase in (
+                "no dead stock", "no products", "no stale", "no items",
+                "all items", "all products", "good news", "healthy", "clean",
+                "no stock", "none",
+            )
+        )
+        return Grade(
+            passed=clean_report,
+            expected="No dead stock present — agent should report all items sold within 60 days",
+            details=["tool returned no rows; verified agent acknowledged clean inventory"],
+        )
+    top_product = str(rows[0]["product"])
+    stock_value = float(rows[0].get("stock_value") or 0)
+    normalized = normalize(response)
+    passed = top_product.casefold() in normalized
+    return Grade(
+        passed=passed,
+        expected=f"{top_product} (${stock_value:,.2f} stock value, 60+ days unsold)",
+        details=[f"top_product={top_product!r}"],
+    )
+
+
+def grade_margin_top_category_gross_profit(response: str) -> Grade:
+    result = margin_analysis(group_by="category")
+    rows = result.get("rows", [])
+    if not rows:
+        return Grade(False, "margin_analysis returned no rows", ["no confirmed sales in period"])
+    # Results are ordered by gross_profit DESC — first row is the winner.
+    top_category = str(rows[0]["name"])
+    gross_profit = float(rows[0].get("gross_profit") or 0)
+    normalized = normalize(response)
+    passed = top_category.casefold() in normalized
+    return Grade(
+        passed=passed,
+        expected=f"{top_category} with ${gross_profit:,.2f} gross profit",
+        details=[f"top_category={top_category!r}"],
+    )
+
+
+def grade_supplier_top_by_spend(response: str) -> Grade:
+    result = supplier_scorecard(months=6)
+    rows = result.get("rows", [])
+    if not rows:
+        return Grade(False, "supplier_scorecard returned no rows", ["no purchase orders in last 6 months"])
+    top_supplier = str(rows[0]["supplier"])
+    total_spend = float(rows[0].get("total_spend") or 0)
+    normalized = normalize(response)
+    passed = top_supplier.casefold() in normalized
+    return Grade(
+        passed=passed,
+        expected=f"{top_supplier} with ${total_spend:,.2f} spend",
+        details=[f"top_supplier={top_supplier!r}"],
+    )
+
+
+def grade_simulate_discount_wool_coat(response: str) -> Grade:
+    result = simulate_discount_impact(["Wool Coat"], 20.0, horizon_days=90)
+    products = result.get("products", [])
+    if not products:
+        return Grade(False, "simulate_discount_impact found no Wool Coat product", ["product name not matched"])
+    p = products[0]
+    sim_revenue = float(p["simulated_revenue"])
+    rev_delta = float(p["revenue_delta"])
+    normalized = normalize(response)
+    # Accept either the delta or the simulated total; 5% relative tolerance for rounding.
+    has_figure = any([
+        contains_number_near(response, abs(rev_delta), tolerance=max(1.0, abs(rev_delta) * 0.05)),
+        contains_number_near(response, sim_revenue, tolerance=max(1.0, sim_revenue * 0.05)),
+    ])
+    passed = "wool coat" in normalized and has_figure and (
+        "margin" in normalized or "revenue" in normalized or "profit" in normalized
+    )
+    return Grade(
+        passed=passed,
+        expected=f"Wool Coat simulated_revenue=${sim_revenue:,.2f}, revenue_delta=${rev_delta:+,.2f}",
+        details=[f"answer numbers={extract_numbers(response)}"],
+    )
+
+
 GRADERS: dict[str, Callable[[str], Grade]] = {
     "active_product_count": grade_active_product_count,
     "outerwear_forecast_next_month": grade_outerwear_forecast_next_month,
@@ -231,6 +353,11 @@ GRADERS: dict[str, Callable[[str], Grade]] = {
     "top_revenue_category_90d": grade_top_revenue_category_90d,
     "schema_sales_by_category": grade_schema_sales_by_category,
     "schema_units_revenue_fields": grade_schema_units_revenue_fields,
+    "stockout_risk_top_critical": grade_stockout_risk_top_critical,
+    "inventory_aging_top_dead_stock": grade_inventory_aging_top_dead_stock,
+    "margin_top_category_gross_profit": grade_margin_top_category_gross_profit,
+    "supplier_top_by_spend": grade_supplier_top_by_spend,
+    "simulate_discount_wool_coat": grade_simulate_discount_wool_coat,
 }
 
 

@@ -40,5 +40,35 @@
     "question": "Which fields should be used for units sold, revenue, and order date in Odoo SQL analytics?",
     "grader": "schema_units_revenue_fields",
     "description": "Agent should identify product_uom_qty, price_unit, and date_order."
+  },
+  {
+    "id": "stockout_risk_top_critical",
+    "question": "Which products are most urgently at risk of stocking out right now?",
+    "grader": "stockout_risk_top_critical",
+    "description": "Agent should call stockout_risk and name the top critical or out-of-stock product."
+  },
+  {
+    "id": "inventory_aging_top_dead_stock",
+    "question": "Which product has the most valuable unsold (dead stock) inventory, considering items with no sales in the last 60 days?",
+    "grader": "inventory_aging_top_dead_stock",
+    "description": "Agent should call inventory_aging and name the top product by stock value."
+  },
+  {
+    "id": "margin_top_category_gross_profit",
+    "question": "Which product category generated the highest gross profit over the last 90 days?",
+    "grader": "margin_top_category_gross_profit",
+    "description": "Agent should call margin_analysis grouped by category and name the top gross-profit category."
+  },
+  {
+    "id": "supplier_top_by_spend",
+    "question": "Which supplier received the most spend in the last 6 months?",
+    "grader": "supplier_top_by_spend",
+    "description": "Agent should call supplier_scorecard and name the top supplier by total spend."
+  },
+  {
+    "id": "simulate_discount_wool_coat",
+    "question": "Simulate a 20% discount on Wool Coat over the next 90 days. What is the expected revenue and margin impact?",
+    "grader": "simulate_discount_wool_coat",
+    "description": "Agent should call simulate_discount_impact for Wool Coat at 20% and report the revenue and margin delta."
   }
 ]
