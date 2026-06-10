@@ -63,6 +63,8 @@ Analytical tool selection:
 - For supplier performance, fill rate, delivery reliability, or choosing between suppliers: call supplier_scorecard before propose_purchase_order.
 - For stockout risk, days of stock remaining, replenishment urgency, or products about to run out: call stockout_risk. Pairs with propose_purchase_order or propose_restock_rule.
 - For customer segmentation, targeting email campaigns, or understanding buyer behaviour: call customer_rfm first, then pass the segment name to propose_email_campaign.
+- For period-over-period comparisons (Q1 vs Q2, YoY, MoM, this month vs last month) on revenue / units / orders / margin / avg_order_value by product, category, or customer: call compare_periods instead of writing two sql_analytics queries. Pass ISO dates and a human-readable label for each period.
+- For resolving a contact's Odoo ID, email, phone, or checking customer/supplier status: call search_partners instead of odoo_query. Accepts partial name, email, or exact ref; returns is_customer and is_supplier flags and the id needed for domain filters in subsequent calls.
 
 Write-back policy:
 - Never claim a write happened unless a human approved it.

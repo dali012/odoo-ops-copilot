@@ -443,6 +443,97 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "compare_periods",
+        "description": (
+            "Compare a sales metric across two arbitrary date ranges, broken down by product, "
+            "category, or customer. Returns value_a, value_b, delta, and pct_change per row, "
+            "plus totals. Use for 'Q1 vs Q2', 'this month vs last month', or any YoY / MoM "
+            "comparison instead of writing two sql_analytics queries and joining them manually."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "enum": ["revenue", "units", "orders", "margin", "avg_order_value"],
+                    "description": (
+                        "Metric to compare: revenue (gross sales), units (qty sold), "
+                        "orders (distinct order count), margin (revenue minus cost), "
+                        "avg_order_value (revenue ÷ orders)."
+                    ),
+                },
+                "dimension": {
+                    "type": "string",
+                    "enum": ["product", "category", "customer"],
+                    "description": "Row granularity: group results by product, category, or customer.",
+                },
+                "period_a": {
+                    "type": "object",
+                    "description": "First comparison period.",
+                    "properties": {
+                        "label": {"type": "string", "description": "Human-readable label, e.g. 'Q1 2024'."},
+                        "start": {"type": "string", "description": "ISO date, e.g. '2024-01-01'."},
+                        "end":   {"type": "string", "description": "ISO date, e.g. '2024-03-31' (inclusive)."},
+                    },
+                    "required": ["start", "end"],
+                },
+                "period_b": {
+                    "type": "object",
+                    "description": "Second comparison period (the 'new' period).",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "start": {"type": "string"},
+                        "end":   {"type": "string"},
+                    },
+                    "required": ["start", "end"],
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "description": "Optional: restrict analysis to a single product category.",
+                },
+                "limit": {"type": "integer", "default": 20},
+            },
+            "required": ["metric", "dimension", "period_a", "period_b"],
+        },
+    },
+    {
+        "name": "search_partners",
+        "description": (
+            "Look up res.partner records by name, email, or internal reference without "
+            "writing Odoo domain syntax. Returns contact details plus customer/supplier "
+            "ranks. Use this instead of odoo_query when you need to resolve a partner "
+            "name to an ID or check whether a contact is a customer or supplier."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": ["string", "null"],
+                    "description": "Partial name match (case-insensitive ilike).",
+                },
+                "email": {
+                    "type": ["string", "null"],
+                    "description": "Partial email match (case-insensitive ilike).",
+                },
+                "ref": {
+                    "type": ["string", "null"],
+                    "description": "Exact internal reference code.",
+                },
+                "partner_type": {
+                    "type": "string",
+                    "enum": ["customer", "supplier", "all"],
+                    "default": "all",
+                    "description": (
+                        "'customer' restricts to customer_rank > 0, "
+                        "'supplier' to supplier_rank > 0, "
+                        "'all' returns any active partner."
+                    ),
+                },
+                "limit": {"type": "integer", "default": 10},
+            },
+        },
+    },
+    {
         "name": "propose_restock_rule",
         "description": (
             "Draft a human-approval write-back proposal for manual Odoo reordering rules. "
@@ -1094,6 +1185,197 @@ def supplier_scorecard(
     }
 
 
+def compare_periods(
+    metric: str,
+    dimension: str,
+    period_a: dict,
+    period_b: dict,
+    category: str | None = None,
+    limit: int = 20,
+) -> dict:
+    valid_metrics = {"revenue", "units", "orders", "margin", "avg_order_value"}
+    valid_dimensions = {"product", "category", "customer"}
+    if metric not in valid_metrics:
+        raise ValueError(f"metric must be one of {sorted(valid_metrics)}.")
+    if dimension not in valid_dimensions:
+        raise ValueError(f"dimension must be one of {sorted(valid_dimensions)}.")
+
+    a_start = str(period_a["start"])
+    a_end   = str(period_a["end"])
+    b_start = str(period_b["start"])
+    b_end   = str(period_b["end"])
+    a_label = str(period_a.get("label") or f"{a_start} – {a_end}")
+    b_label = str(period_b.get("label") or f"{b_start} – {b_end}")
+
+    date_min = min(a_start, b_start)
+    date_max = max(a_end, b_end)
+
+    if dimension == "product":
+        dim_select = "COALESCE(pt.name->>'en_US', pt.name::text) AS dimension"
+        dim_group  = "pt.id, COALESCE(pt.name->>'en_US', pt.name::text)"
+    elif dimension == "category":
+        dim_select = "pc.name AS dimension"
+        dim_group  = "pc.id, pc.name"
+    else:  # customer
+        dim_select = "rp.name AS dimension"
+        dim_group  = "rp.id, rp.name"
+
+    cost_expr  = "COALESCE(NULLIF(pp.standard_price, 0), pt.standard_price, 0)"
+    rev_expr   = "sol.price_unit * sol.product_uom_qty"
+    filter_a   = "FILTER (WHERE DATE(so.date_order) BETWEEN :a_start::date AND :a_end::date)"
+    filter_b   = "FILTER (WHERE DATE(so.date_order) BETWEEN :b_start::date AND :b_end::date)"
+
+    if metric == "revenue":
+        agg_tmpl = f"ROUND(COALESCE(SUM({rev_expr}) {{f}}, 0)::numeric, 2)"
+    elif metric == "units":
+        agg_tmpl = f"ROUND(COALESCE(SUM(sol.product_uom_qty) {{f}}, 0)::numeric, 1)"
+    elif metric == "orders":
+        agg_tmpl = "COUNT(DISTINCT so.id) {f}"
+    elif metric == "margin":
+        margin_expr = f"(sol.price_unit - {cost_expr}) * sol.product_uom_qty"
+        agg_tmpl = f"ROUND(COALESCE(SUM({margin_expr}) {{f}}, 0)::numeric, 2)"
+    else:  # avg_order_value — store raw revenue then divide by order count in Python
+        agg_tmpl = f"ROUND(COALESCE(SUM({rev_expr}) {{f}}, 0)::numeric, 2)"
+
+    agg_a = agg_tmpl.format(f=filter_a)
+    agg_b = agg_tmpl.format(f=filter_b)
+
+    cnt_cols = (
+        f",\n            COUNT(DISTINCT so.id) {filter_a} AS order_cnt_a,"
+        f"\n            COUNT(DISTINCT so.id) {filter_b} AS order_cnt_b"
+        if metric == "avg_order_value" else ""
+    )
+
+    params: dict[str, object] = {
+        "a_start": a_start, "a_end": a_end,
+        "b_start": b_start, "b_end": b_end,
+        "date_min": date_min, "date_max": date_max,
+        "limit": int(limit),
+    }
+    cat_filter = ""
+    if category:
+        params["category"] = category
+        cat_filter = "AND pc.name = :category"
+
+    sql = text(f"""
+        SELECT
+            {dim_select},
+            {agg_a} AS value_a,
+            {agg_b} AS value_b
+            {cnt_cols}
+        FROM sale_order_line sol
+        JOIN sale_order so ON so.id = sol.order_id
+        JOIN product_product pp ON pp.id = sol.product_id
+        JOIN product_template pt ON pt.id = pp.product_tmpl_id
+        JOIN product_category pc ON pc.id = pt.categ_id
+        JOIN res_partner rp ON rp.id = so.partner_id
+        WHERE so.state IN ('sale', 'done')
+          AND DATE(so.date_order) BETWEEN :date_min::date AND :date_max::date
+          {cat_filter}
+        GROUP BY {dim_group}
+        ORDER BY value_b DESC NULLS LAST
+        LIMIT :limit
+    """)
+
+    with _get_engine().connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL TRANSACTION READ ONLY"))
+            conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
+            df = pd.read_sql_query(sql, conn, params=params)
+
+    if metric == "avg_order_value" and not df.empty:
+        df["value_a"] = (
+            df["value_a"] / df["order_cnt_a"].replace(0, float("nan"))
+        ).round(2).fillna(0)
+        df["value_b"] = (
+            df["value_b"] / df["order_cnt_b"].replace(0, float("nan"))
+        ).round(2).fillna(0)
+        df = df.drop(columns=["order_cnt_a", "order_cnt_b"])
+
+    if not df.empty:
+        df["delta"] = (df["value_b"] - df["value_a"]).round(2)
+        df["pct_change"] = df.apply(
+            lambda row: round(float(row["delta"]) / float(row["value_a"]) * 100, 1)
+            if float(row.get("value_a") or 0) != 0 else None,
+            axis=1,
+        )
+        total_a = float(df["value_a"].sum())
+        total_b = float(df["value_b"].sum())
+    else:
+        total_a = 0.0
+        total_b = 0.0
+
+    total_delta = total_b - total_a
+    total_pct = round(total_delta / total_a * 100, 1) if total_a != 0 else None
+
+    return {
+        "metric": metric,
+        "dimension": dimension,
+        "period_a_label": a_label,
+        "period_b_label": b_label,
+        "rows": df.to_dict(orient="records") if not df.empty else [],
+        "row_count": len(df),
+        "totals": {
+            "period_a": round(total_a, 2),
+            "period_b": round(total_b, 2),
+            "delta": round(total_delta, 2),
+            "pct_change": total_pct,
+        },
+        "note": (
+            f"value_a = {a_label}, value_b = {b_label}. "
+            f"delta = value_b − value_a. "
+            f"Rows ordered by value_b descending. "
+            f"margin uses standard_price as cost; see data_quality_warning from margin_analysis."
+        ),
+    }
+
+
+def search_partners(
+    name: str | None = None,
+    email: str | None = None,
+    ref: str | None = None,
+    partner_type: str = "all",
+    limit: int = 10,
+) -> dict:
+    has_search = any([name, email, ref])
+    if not has_search:
+        return {"error": "At least one of name, email, or ref is required."}
+
+    domain: list = [["active", "=", True]]
+    if name:
+        domain.append(["name", "ilike", name])
+    if email:
+        domain.append(["email", "ilike", email])
+    if ref:
+        domain.append(["ref", "=", ref])
+    if partner_type == "customer":
+        domain.append(["customer_rank", ">", 0])
+    elif partner_type == "supplier":
+        domain.append(["supplier_rank", ">", 0])
+
+    fields = [
+        "name", "email", "phone", "mobile", "ref",
+        "customer_rank", "supplier_rank",
+        "company_name", "is_company",
+        "street", "city", "country_id",
+    ]
+    rows = odoo.search_read("res.partner", domain=domain, fields=fields, limit=int(limit))
+
+    for row in rows:
+        row["is_customer"] = bool(row.get("customer_rank") and row["customer_rank"] > 0)
+        row["is_supplier"] = bool(row.get("supplier_rank") and row["supplier_rank"] > 0)
+
+    return {
+        "count": len(rows),
+        "records": rows,
+        "note": (
+            "customer_rank > 0 = has confirmed sale orders. "
+            "supplier_rank > 0 = has confirmed purchase orders. "
+            "Use the id field in subsequent odoo_query calls: [['partner_id', '=', <id>]]."
+        ),
+    }
+
+
 def propose_discount_rule(products, discount_percent, reason, min_quantity=1):
     return {
         "action_type": "discount_rule",
@@ -1139,6 +1421,8 @@ DISPATCH = {
     "inventory_aging": inventory_aging,
     "margin_analysis": margin_analysis,
     "supplier_scorecard": supplier_scorecard,
+    "compare_periods": compare_periods,
+    "search_partners": search_partners,
     "propose_discount_rule": propose_discount_rule,
     "propose_restock_rule": propose_restock_rule,
 }
