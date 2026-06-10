@@ -18,6 +18,7 @@ from .config import config
 from .odoo_client import odoo
 
 _engine = None
+_company_id_cache: int | None = None
 
 SQL_ROW_CAP = 100
 SQL_TIMEOUT_MS = 5000
@@ -75,6 +76,25 @@ def _get_engine():
     if _engine is None:
         _engine = create_engine(config.PG_URL, execution_options={"postgresql_readonly": True})
     return _engine
+
+
+def _default_company_id() -> int:
+    """Return the primary company id (cached). Used to extract jsonb cost fields."""
+    global _company_id_cache
+    if _company_id_cache is None:
+        with _get_engine().connect() as conn:
+            row = conn.execute(text("SELECT id FROM res_company ORDER BY id LIMIT 1")).mappings().first()
+        _company_id_cache = int(row["id"]) if row else 1
+    return _company_id_cache
+
+
+def _cost_expr(pp_alias: str = "pp") -> str:
+    """SQL expression for unit cost from product_product.
+    In Odoo 17+ standard_price is company-dependent and stored as jsonb
+    {"<company_id>": value}. product_template.standard_price is not a real column.
+    """
+    cid = _default_company_id()
+    return f"COALESCE(({pp_alias}.standard_price->>'{cid}')::numeric, 0)"
 
 
 def _strip_trailing_semicolon(sql: str) -> str:
@@ -660,11 +680,12 @@ def simulate_discount_impact(
         params[key] = f"%{name}%"
         filters.append(f"COALESCE(pt.name->>'en_US', pt.name::text) ILIKE :{key}")
 
+    cost_field = _cost_expr()
     sql = text(f"""
         SELECT pt.id,
                COALESCE(pt.name->>'en_US', pt.name::text) AS product,
                pt.list_price,
-               pt.standard_price,
+               {cost_field} AS standard_price,
                COALESCE(SUM(sol.product_uom_qty), 0) AS baseline_units
         FROM product_template pt
         LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
@@ -674,7 +695,7 @@ def simulate_discount_impact(
          AND so.state IN ('sale', 'done')
          AND so.date_order >= now() - (:days || ' days')::interval
         WHERE {' OR '.join(filters)}
-        GROUP BY pt.id, product, pt.list_price, pt.standard_price
+        GROUP BY pt.id, product, pt.list_price, {cost_field}
         ORDER BY product
     """)
     with _get_engine().connect() as conn:
@@ -980,10 +1001,12 @@ def inventory_aging(
         params["category"] = category
         category_filter = "AND pc.name = :category"
 
+    cost_field = _cost_expr()
     sql = text(f"""
         WITH stock AS (
             SELECT pp.product_tmpl_id,
-                   SUM(sq.quantity) AS qty_on_hand
+                   SUM(sq.quantity) AS qty_on_hand,
+                   COALESCE(AVG({cost_field}), 0) AS unit_cost
             FROM stock_quant sq
             JOIN product_product pp ON pp.id = sq.product_id
             JOIN stock_location sl ON sl.id = sq.location_id
@@ -1009,7 +1032,7 @@ def inventory_aging(
                 WHEN ls.last_sold_date IS NULL THEN NULL
                 ELSE EXTRACT(DAY FROM NOW() - ls.last_sold_date)::int
             END AS days_since_last_sale,
-            ROUND((s.qty_on_hand * pt.standard_price)::numeric, 2) AS stock_value
+            ROUND((s.qty_on_hand * s.unit_cost)::numeric, 2) AS stock_value
         FROM stock s
         JOIN product_template pt ON pt.id = s.product_tmpl_id
         JOIN product_category pc ON pc.id = pt.categ_id
@@ -1066,9 +1089,9 @@ def margin_analysis(
         group_expr = "pt.id, COALESCE(pt.name->>'en_US', pt.name::text), pc.name"
         extra_col = ", pc.name AS category"
 
-    # Use variant-level standard_price (product_product) first; fall back to template-level.
-    # In Odoo the variant column is more reliably populated than the template aggregate.
-    cost_expr = "COALESCE(NULLIF(pp.standard_price, 0), pt.standard_price, 0)"
+    # In Odoo 17+ standard_price is a company-dependent jsonb column on product_product.
+    # product_template.standard_price does not exist as a real DB column.
+    cost_expr = _cost_expr()
 
     sql = text(f"""
         SELECT
@@ -1117,12 +1140,12 @@ def margin_analysis(
         "row_count": len(df),
         "group_by": group_by,
         "period_days": period_days,
-        "note": "Cost uses product_product.standard_price (falls back to product_template.standard_price); margins are indicative, not accounting truth.",
+        "note": "Cost uses product_product.standard_price (jsonb company-dependent field); margins are indicative, not accounting truth.",
     }
     if cost_unpopulated:
         result["data_quality_warning"] = (
             "All standard_price values are 0.0. Cost data has not been configured in Odoo "
-            "(product_product.standard_price and product_template.standard_price are both 0). "
+            "(product_product.standard_price is 0 for all products). "
             "Margin percentages will show 100%% and are not meaningful. "
             "Populate product costs in Odoo before relying on this tool."
         )
@@ -1220,10 +1243,11 @@ def compare_periods(
         dim_select = "rp.name AS dimension"
         dim_group  = "rp.id, rp.name"
 
-    cost_expr  = "COALESCE(NULLIF(pp.standard_price, 0), pt.standard_price, 0)"
+    cost_expr  = _cost_expr()
     rev_expr   = "sol.price_unit * sol.product_uom_qty"
-    filter_a   = "FILTER (WHERE DATE(so.date_order) BETWEEN :a_start::date AND :a_end::date)"
-    filter_b   = "FILTER (WHERE DATE(so.date_order) BETWEEN :b_start::date AND :b_end::date)"
+    # Cast the column side, not the parameter — SQLAlchemy text() mis-parses :param::type.
+    filter_a   = "FILTER (WHERE so.date_order::date BETWEEN :a_start AND :a_end)"
+    filter_b   = "FILTER (WHERE so.date_order::date BETWEEN :b_start AND :b_end)"
 
     if metric == "revenue":
         agg_tmpl = f"ROUND(COALESCE(SUM({rev_expr}) {{f}}, 0)::numeric, 2)"
@@ -1270,7 +1294,7 @@ def compare_periods(
         JOIN product_category pc ON pc.id = pt.categ_id
         JOIN res_partner rp ON rp.id = so.partner_id
         WHERE so.state IN ('sale', 'done')
-          AND DATE(so.date_order) BETWEEN :date_min::date AND :date_max::date
+          AND so.date_order::date BETWEEN :date_min AND :date_max
           {cat_filter}
         GROUP BY {dim_group}
         ORDER BY value_b DESC NULLS LAST
@@ -1325,7 +1349,7 @@ def compare_periods(
             f"value_a = {a_label}, value_b = {b_label}. "
             f"delta = value_b − value_a. "
             f"Rows ordered by value_b descending. "
-            f"margin uses standard_price as cost; see data_quality_warning from margin_analysis."
+            f"margin uses pp.standard_price (jsonb cost field); see data_quality_warning from margin_analysis."
         ),
     }
 

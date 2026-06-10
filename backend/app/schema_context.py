@@ -56,6 +56,8 @@ SQL patterns:
 - Product category sales: sale_order_line -> sale_order -> product_product -> product_template -> product_category.
 - Use date filters on sale_order.date_order, for example sale_order.date_order >= now() - interval '90 days'.
 - Do not invent Odoo tables such as products, orders, order_lines, inventory, or categories.
+- product_template.standard_price does NOT exist as a database column; it is a computed field. Never reference pt.standard_price in sql_analytics. Use margin_analysis or compare_periods for cost calculations.
+- product_product.standard_price is stored as jsonb (company-dependent). Do not reference it directly in sql_analytics; use the dedicated margin or comparison tools instead.
 
 Analytical tool selection:
 - For dead stock, slow-moving items, unsold inventory, or clearance candidates: call inventory_aging. Pairs directly with propose_discount_rule.
