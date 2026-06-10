@@ -694,22 +694,26 @@ def margin_analysis(
         group_expr = "pt.id, COALESCE(pt.name->>'en_US', pt.name::text), pc.name"
         extra_col = ", pc.name AS category"
 
+    # Use variant-level standard_price (product_product) first; fall back to template-level.
+    # In Odoo the variant column is more reliably populated than the template aggregate.
+    cost_expr = "COALESCE(NULLIF(pp.standard_price, 0), pt.standard_price, 0)"
+
     sql = text(f"""
         SELECT
             {select_name}
             {extra_col},
             ROUND(SUM(sol.product_uom_qty)::numeric, 1) AS units_sold,
             ROUND(SUM(sol.price_unit * sol.product_uom_qty)::numeric, 2) AS revenue,
-            ROUND(SUM(pt.standard_price * sol.product_uom_qty)::numeric, 2) AS cost,
+            ROUND(SUM({cost_expr} * sol.product_uom_qty)::numeric, 2) AS cost,
             ROUND((
                 SUM(sol.price_unit * sol.product_uom_qty) -
-                SUM(pt.standard_price * sol.product_uom_qty)
+                SUM({cost_expr} * sol.product_uom_qty)
             )::numeric, 2) AS gross_profit,
             ROUND(
                 CASE
                     WHEN SUM(sol.price_unit * sol.product_uom_qty) = 0 THEN 0
                     ELSE (
-                        1 - SUM(pt.standard_price * sol.product_uom_qty) /
+                        1 - SUM({cost_expr} * sol.product_uom_qty) /
                             NULLIF(SUM(sol.price_unit * sol.product_uom_qty), 0)
                     ) * 100
                 END::numeric, 1
@@ -735,13 +739,22 @@ def margin_analysis(
             conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
             df = pd.read_sql_query(sql, conn, params=params)
 
-    return {
+    cost_unpopulated = not df.empty and df["cost"].fillna(0).sum() == 0
+    result: dict = {
         "rows": df.to_dict(orient="records"),
         "row_count": len(df),
         "group_by": group_by,
         "period_days": period_days,
-        "note": "Cost uses product.standard_price at query time; margins are indicative, not accounting truth.",
+        "note": "Cost uses product_product.standard_price (falls back to product_template.standard_price); margins are indicative, not accounting truth.",
     }
+    if cost_unpopulated:
+        result["data_quality_warning"] = (
+            "All standard_price values are 0.0. Cost data has not been configured in Odoo "
+            "(product_product.standard_price and product_template.standard_price are both 0). "
+            "Margin percentages will show 100%% and are not meaningful. "
+            "Populate product costs in Odoo before relying on this tool."
+        )
+    return result
 
 
 def supplier_scorecard(
