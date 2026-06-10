@@ -1,6 +1,6 @@
 # Odoo Ops Copilot
 
-An AI operations copilot for a live Odoo ERP. It answers natural-language business questions, grounds the answer in Odoo data, forecasts demand, and can draft human-approved writebacks such as purchase orders, reorder rules, discounts, POS pricing changes, invoice follow-ups, email campaigns, and stock transfers.
+An AI operations copilot for a live Odoo ERP. It answers natural-language business questions, grounds answers in Odoo data, forecasts demand, analyses margin and stockout risk, segments customers by RFM, compares periods side-by-side, and drafts human-approved write-backs — purchase orders, reorder rules, discounts, price updates, vendor price corrections, inventory adjustments, sale order cancellations, POS pricing changes, invoice follow-ups, email campaigns, and stock transfers.
 
 **Live demo:** _coming soon — deploying to VPS_
 **Eval pass rate:** 91 % on the golden-question suite (10/11 questions, run against the seeded database)
@@ -57,22 +57,39 @@ Nginx reverse proxy (port 80/443)
 
 ## Tool Surface
 
-Read tools:
+**Lookup and analytics (read-only):**
 
-- `odoo_query` — Odoo record lookup via XML-RPC
-- `sql_analytics` — guarded SQL aggregates (SELECT-only, allowlisted tables, row cap)
-- `forecast_demand` — category-level monthly demand forecast (pandas + statsmodels)
+| Tool | What it does |
+| ---- | ----------- |
+| `odoo_query` | Record lookup via Odoo XML-RPC; use for catalog/stock/order records |
+| `sql_analytics` | Free-form guarded SELECT — single statement, allowlisted tables, read-only transaction, row cap |
+| `search_partners` | `res.partner` lookup by name / email / ref without writing domain syntax; returns `is_customer` / `is_supplier` flags |
+| `forecast_demand` | Category-level monthly demand forecast (seasonal exponential smoothing via statsmodels) |
+| `simulate_discount_impact` | Read-only revenue + margin scenario for a proposed discount; never writes to Odoo |
+| `compare_periods` | Side-by-side period comparison (revenue / units / orders / margin / avg order value) by product, category, or customer; single conditional-aggregation query |
+| `stockout_risk` | Products at risk of running out ranked by urgency (`out_of_stock` → `critical` → `warning` → `watch`); uses avg daily sales velocity |
+| `inventory_aging` | Dead-stock scan — products with on-hand stock but no confirmed sale in N days, ranked by stock value at cost |
+| `margin_analysis` | Gross margin per product or category from confirmed sales; uses variant-level `standard_price` with template fallback |
+| `supplier_scorecard` | Supplier fill rate, total spend, avg expected lead time, and products sourced over a configurable window |
+| `customer_rfm` | RFM segmentation (champions / loyal / prospects / at_risk / lost) using NTILE tertiles; returns per-customer scores and segment summary |
 
-Approval-gated writeback proposal tools:
+**Approval-gated write-back proposal tools:**
 
-- `propose_discount_rule`
-- `propose_restock_rule`
-- `propose_purchase_order`
-- `propose_invoice_reminder`
-- `propose_price_update`
-- `propose_pos_pricelist`
-- `propose_email_campaign`
-- `propose_transfer_stock`
+Each `propose_*` tool creates a pending action for human review. Nothing is written to Odoo until the user clicks **Approve** in the UI.
+
+| Tool | Approval creates |
+| ---- | --------------- |
+| `propose_discount_rule` | `product.pricelist.item` discount rule |
+| `propose_restock_rule` | Manual `stock.warehouse.orderpoint` reorder rule |
+| `propose_purchase_order` | Confirmed `purchase.order` with lines |
+| `propose_invoice_reminder` | `mail.activity` follow-up on overdue invoices |
+| `propose_price_update` | Updated `list_price` on `product.template` |
+| `propose_pos_pricelist` | Updated pricelist on the Main Store `pos.config` |
+| `propose_email_campaign` | Draft `mailing.mailing` (never auto-sends) |
+| `propose_transfer_stock` | Internal `stock.picking` for warehouse staff to validate |
+| `propose_inventory_adjustment` | `stock.quant` physical count correction via `action_apply_inventory` |
+| `propose_vendor_price_update` | Updated (or created) `product.supplierinfo` price / lead time |
+| `propose_sale_order_cancel` | Cancellation of `sale.order` records in draft / sent / sale state |
 
 ## Tech Stack
 
