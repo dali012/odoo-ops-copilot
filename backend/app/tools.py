@@ -314,6 +314,61 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "stockout_risk",
+        "description": (
+            "Find actively-selling products at risk of running out of stock. "
+            "Calculates days_of_stock = qty_on_hand / avg_daily_sales and flags "
+            "products below their reorder point or under the risk threshold. "
+            "Returns urgency labels: out_of_stock, critical (<7 days), warning. "
+            "Use for replenishment decisions before propose_purchase_order or propose_restock_rule."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days_of_history": {
+                    "type": "integer",
+                    "default": 90,
+                    "description": "Lookback period (days) used to compute average daily sales velocity.",
+                },
+                "risk_days_threshold": {
+                    "type": "integer",
+                    "default": 30,
+                    "description": "Flag as 'warning' if days of stock remaining is below this number.",
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "description": "Optional: filter to a single product category name.",
+                },
+                "limit": {"type": "integer", "default": 30},
+            },
+        },
+    },
+    {
+        "name": "customer_rfm",
+        "description": (
+            "Segment customers by Recency / Frequency / Monetary value. "
+            "Returns per-customer RFM scores and segment labels "
+            "(champions, loyal, prospects, at_risk, lost), plus a segment summary. "
+            "Use before propose_email_campaign to target the right audience."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "period_days": {
+                    "type": "integer",
+                    "default": 365,
+                    "description": "Lookback period for frequency and monetary scores.",
+                },
+                "segment": {
+                    "type": ["string", "null"],
+                    "enum": ["champions", "loyal", "prospects", "at_risk", "lost", None],
+                    "description": "Optional: return rows only for this segment.",
+                },
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+    },
+    {
         "name": "inventory_aging",
         "description": (
             "Find products that have stock on hand but no confirmed sales in the last N days. "
@@ -597,6 +652,232 @@ def simulate_discount_impact(
     }
 
 
+def stockout_risk(
+    days_of_history: int = 90,
+    risk_days_threshold: int = 30,
+    category: str | None = None,
+    limit: int = 30,
+) -> dict:
+    params: dict[str, object] = {
+        "days": int(days_of_history),
+        "threshold": int(risk_days_threshold),
+        "limit": int(limit),
+    }
+    category_filter = ""
+    if category:
+        params["category"] = category
+        category_filter = "AND pc.name = :category"
+
+    sql = text(f"""
+        WITH avg_sales AS (
+            SELECT pp.product_tmpl_id,
+                   SUM(sol.product_uom_qty) / :days AS avg_daily_sales
+            FROM sale_order_line sol
+            JOIN sale_order so ON so.id = sol.order_id
+            JOIN product_product pp ON pp.id = sol.product_id
+            WHERE so.state IN ('sale', 'done')
+              AND so.date_order >= NOW() - (:days || ' days')::interval
+            GROUP BY pp.product_tmpl_id
+        ),
+        stock AS (
+            SELECT pp.product_tmpl_id,
+                   SUM(sq.quantity) AS qty_on_hand
+            FROM stock_quant sq
+            JOIN product_product pp ON pp.id = sq.product_id
+            JOIN stock_location sl ON sl.id = sq.location_id
+            WHERE sl.usage = 'internal'
+            GROUP BY pp.product_tmpl_id
+        ),
+        reorder AS (
+            SELECT pp.product_tmpl_id,
+                   MIN(swop.product_min_qty) AS reorder_point
+            FROM stock_warehouse_orderpoint swop
+            JOIN product_product pp ON pp.id = swop.product_id
+            GROUP BY pp.product_tmpl_id
+        ),
+        base AS (
+            SELECT
+                COALESCE(pt.name->>'en_US', pt.name::text) AS product,
+                pc.name AS category,
+                ROUND(COALESCE(s.qty_on_hand, 0)::numeric, 2) AS qty_on_hand,
+                ROUND(COALESCE(a.avg_daily_sales, 0)::numeric, 4) AS avg_daily_sales,
+                CASE
+                    WHEN COALESCE(a.avg_daily_sales, 0) = 0 THEN NULL
+                    ELSE ROUND((COALESCE(s.qty_on_hand, 0) / a.avg_daily_sales)::numeric, 1)
+                END AS days_of_stock,
+                ROUND(COALESCE(r.reorder_point, 0)::numeric, 2) AS reorder_point,
+                (COALESCE(s.qty_on_hand, 0) < COALESCE(r.reorder_point, 0)
+                 AND r.reorder_point IS NOT NULL) AS is_below_reorder
+            FROM avg_sales a
+            JOIN product_template pt ON pt.id = a.product_tmpl_id
+            JOIN product_category pc ON pc.id = pt.categ_id
+            LEFT JOIN stock s ON s.product_tmpl_id = a.product_tmpl_id
+            LEFT JOIN reorder r ON r.product_tmpl_id = a.product_tmpl_id
+            WHERE pt.active = true
+              AND (
+                  COALESCE(s.qty_on_hand, 0) <= 0
+                  OR (COALESCE(s.qty_on_hand, 0) < COALESCE(r.reorder_point, 0)
+                      AND r.reorder_point IS NOT NULL)
+                  OR (a.avg_daily_sales > 0
+                      AND COALESCE(s.qty_on_hand, 0) / a.avg_daily_sales < :threshold)
+              )
+              {category_filter}
+        )
+        SELECT
+            product,
+            category,
+            qty_on_hand,
+            avg_daily_sales,
+            days_of_stock,
+            reorder_point,
+            is_below_reorder,
+            CASE
+                WHEN qty_on_hand <= 0 AND avg_daily_sales > 0         THEN 'out_of_stock'
+                WHEN days_of_stock IS NOT NULL AND days_of_stock < 7   THEN 'critical'
+                WHEN is_below_reorder
+                     OR (days_of_stock IS NOT NULL
+                         AND days_of_stock < :threshold)               THEN 'warning'
+                ELSE 'watch'
+            END AS urgency
+        FROM base
+        ORDER BY
+            CASE
+                WHEN qty_on_hand <= 0 AND avg_daily_sales > 0        THEN 1
+                WHEN days_of_stock IS NOT NULL AND days_of_stock < 7  THEN 2
+                WHEN is_below_reorder
+                     OR (days_of_stock IS NOT NULL
+                         AND days_of_stock < :threshold)              THEN 3
+                ELSE 4
+            END,
+            avg_daily_sales DESC
+        LIMIT :limit
+    """)
+
+    with _get_engine().connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL TRANSACTION READ ONLY"))
+            conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
+            df = pd.read_sql_query(sql, conn, params=params)
+
+    return {
+        "rows": df.to_dict(orient="records"),
+        "row_count": len(df),
+        "days_of_history": days_of_history,
+        "risk_days_threshold": risk_days_threshold,
+        "note": (
+            "urgency: out_of_stock=actively selling but zero stock, "
+            "critical=<7 days remaining, warning=below reorder point or "
+            f"<{risk_days_threshold} days remaining. "
+            "avg_daily_sales is based on confirmed sales over the last "
+            f"{days_of_history} days."
+        ),
+    }
+
+
+def customer_rfm(
+    period_days: int = 365,
+    segment: str | None = None,
+    limit: int = 50,
+) -> dict:
+    valid_segments = {"champions", "loyal", "prospects", "at_risk", "lost"}
+    if segment and segment not in valid_segments:
+        segment = None
+
+    params: dict[str, object] = {"days": int(period_days)}
+
+    # Fetch all customers with RFM scores (capped high so segment summary is accurate).
+    sql = text("""
+        WITH customer_orders AS (
+            SELECT
+                so.partner_id,
+                COUNT(DISTINCT so.id)          AS order_count,
+                SUM(so.amount_total)            AS total_spend,
+                MAX(so.date_order)              AS last_order_date
+            FROM sale_order so
+            WHERE so.state IN ('sale', 'done')
+              AND so.date_order >= NOW() - (:days || ' days')::interval
+            GROUP BY so.partner_id
+        ),
+        rfm_scored AS (
+            SELECT
+                co.*,
+                EXTRACT(DAY FROM NOW() - co.last_order_date)::int AS recency_days,
+                NTILE(3) OVER (ORDER BY co.last_order_date DESC) AS r_score,
+                NTILE(3) OVER (ORDER BY co.order_count ASC)      AS f_score,
+                NTILE(3) OVER (ORDER BY co.total_spend ASC)       AS m_score
+            FROM customer_orders co
+        ),
+        segmented AS (
+            SELECT
+                rs.*,
+                CASE
+                    WHEN rs.r_score = 1 AND rs.f_score = 3 AND rs.m_score = 3 THEN 'champions'
+                    WHEN rs.r_score <= 2 AND rs.f_score >= 2 AND rs.m_score >= 2 THEN 'loyal'
+                    WHEN rs.r_score = 1 AND rs.f_score <= 2                      THEN 'prospects'
+                    WHEN rs.r_score >= 2 AND rs.f_score >= 2                     THEN 'at_risk'
+                    ELSE 'lost'
+                END AS rfm_segment
+            FROM rfm_scored rs
+        )
+        SELECT
+            rp.name                               AS customer,
+            rp.email                              AS email,
+            s.recency_days,
+            s.order_count,
+            ROUND(s.total_spend::numeric, 2)      AS total_spend,
+            s.r_score,
+            s.f_score,
+            s.m_score,
+            s.rfm_segment
+        FROM segmented s
+        JOIN res_partner rp ON rp.id = s.partner_id
+        WHERE rp.active = true
+        ORDER BY s.total_spend DESC
+        LIMIT 500
+    """)
+
+    with _get_engine().connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL TRANSACTION READ ONLY"))
+            conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
+            df = pd.read_sql_query(sql, conn, params=params)
+
+    # Compute segment summary before any row filtering.
+    if not df.empty:
+        summary = (
+            df.groupby("rfm_segment")
+            .agg(
+                customer_count=("customer", "count"),
+                total_spend=("total_spend", "sum"),
+                avg_spend_per_customer=("total_spend", "mean"),
+            )
+            .round(2)
+            .reset_index()
+            .to_dict(orient="records")
+        )
+    else:
+        summary = []
+
+    if segment:
+        df = df[df["rfm_segment"] == segment]
+
+    return {
+        "rows": df.head(int(limit)).to_dict(orient="records"),
+        "row_count": len(df.head(int(limit))),
+        "segment_summary": summary,
+        "period_days": period_days,
+        "note": (
+            "Segments — champions: recent, frequent, high spend. "
+            "loyal: consistent mid-to-high buyers. "
+            "prospects: recent but low frequency. "
+            "at_risk: infrequent, used to be active. "
+            "lost: low recency and low activity. "
+            "Scores use tertiles (1=low, 3=high). "
+            "Pass segment name to propose_email_campaign to target a group."
+        ),
+    }
+
+
 def inventory_aging(
     days_threshold: int = 60,
     category: str | None = None,
@@ -853,6 +1134,8 @@ DISPATCH = {
     "sql_analytics": sql_analytics,
     "forecast_demand": forecast_demand,
     "simulate_discount_impact": simulate_discount_impact,
+    "stockout_risk": stockout_risk,
+    "customer_rfm": customer_rfm,
     "inventory_aging": inventory_aging,
     "margin_analysis": margin_analysis,
     "supplier_scorecard": supplier_scorecard,

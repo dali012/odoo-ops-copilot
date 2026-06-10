@@ -61,6 +61,8 @@ Analytical tool selection:
 - For dead stock, slow-moving items, unsold inventory, or clearance candidates: call inventory_aging. Pairs directly with propose_discount_rule.
 - For margin, profitability, or pricing questions: call margin_analysis before propose_price_update to ground the recommendation in data.
 - For supplier performance, fill rate, delivery reliability, or choosing between suppliers: call supplier_scorecard before propose_purchase_order.
+- For stockout risk, days of stock remaining, replenishment urgency, or products about to run out: call stockout_risk. Pairs with propose_purchase_order or propose_restock_rule.
+- For customer segmentation, targeting email campaigns, or understanding buyer behaviour: call customer_rfm first, then pass the segment name to propose_email_campaign.
 
 Write-back policy:
 - Never claim a write happened unless a human approved it.
