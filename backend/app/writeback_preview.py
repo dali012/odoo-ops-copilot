@@ -313,6 +313,12 @@ def prepare_writeback_action(action_type: str, payload: dict[str, Any]) -> tuple
         return _json_safe_pair(payload, _preview_price_update(payload))
     if action_type == "transfer_stock":
         return _json_safe_pair(payload, _preview_transfer_stock(payload))
+    if action_type == "inventory_adjustment":
+        return _json_safe_pair(payload, _preview_inventory_adjustment(payload))
+    if action_type == "vendor_price_update":
+        return _json_safe_pair(payload, _preview_vendor_price_update(payload))
+    if action_type == "sale_order_cancel":
+        return _json_safe_pair(payload, _preview_sale_order_cancel(payload))
 
     return _json_safe_pair(payload, _preview(
         odoo_model="unknown",
@@ -595,4 +601,188 @@ def _preview_transfer_stock(payload: dict[str, Any]) -> dict[str, Any]:
         ],
         expected_impact=[f"Creates an internal transfer for {payload.get('qty')} x {product}."],
         risk_notes=["Warehouse staff still validates and completes the stock transfer in Odoo."],
+    )
+
+
+def _preview_inventory_adjustment(payload: dict[str, Any]) -> dict[str, Any]:
+    product_name = str(payload.get("product") or "")
+    location_name = str(payload.get("location") or "WH/Stock")
+    counted_qty = float(payload.get("qty") or 0)
+
+    current = _fetch_one(
+        """
+        SELECT sq.id, sq.quantity AS system_qty, sl.complete_name AS location
+        FROM stock_quant sq
+        JOIN product_product pp ON pp.id = sq.product_id
+        JOIN product_template pt ON pt.id = pp.product_tmpl_id
+        JOIN stock_location sl ON sl.id = sq.location_id
+        WHERE COALESCE(pt.name->>'en_US', pt.name::text) ILIKE :product
+          AND sl.complete_name ILIKE :location
+          AND sl.usage = 'internal'
+        ORDER BY sq.id
+        LIMIT 1
+        """,
+        {"product": f"%{product_name}%", "location": f"%{location_name}%"},
+    )
+
+    system_qty = float(current["system_qty"]) if current and current.get("system_qty") is not None else 0.0
+    difference = counted_qty - system_qty
+
+    return _preview(
+        odoo_model="stock.quant",
+        operation="inventory_adjustment",
+        records=[
+            _record(
+                label=product_name,
+                operation="update" if current else "create",
+                odoo_id=int(current["id"]) if current and current.get("id") else None,
+                changes=[
+                    _change("quantity", system_qty, counted_qty, "On-hand quantity"),
+                    _change("difference", None, difference, "Adjustment (+/-)"),
+                ],
+                metadata={"location": location_name},
+            )
+        ],
+        expected_impact=[
+            f"Sets on-hand qty of '{product_name}' to {counted_qty:g} units at {location_name}.",
+            f"Adjustment: {'+' if difference >= 0 else ''}{difference:g} units.",
+        ],
+        risk_notes=[
+            "This creates an inventory adjustment journal entry; the change is visible in stock moves.",
+            "If the product has lots/serial numbers the adjustment will target all quants for that SKU.",
+        ],
+    )
+
+
+def _preview_vendor_price_update(payload: dict[str, Any]) -> dict[str, Any]:
+    records = []
+    for update in payload.get("updates") or []:
+        product_name = str(update.get("product") or "")
+        supplier_name = update.get("supplier")
+        new_price = update.get("new_price")
+        lead_time = update.get("lead_time_days")
+
+        params: dict[str, Any] = {"product": f"%{product_name}%"}
+        supplier_clause = ""
+        if supplier_name:
+            params["supplier"] = f"%{supplier_name}%"
+            supplier_clause = "AND rp.name ILIKE :supplier"
+
+        infos = _fetch_all(
+            f"""
+            SELECT psi.id, psi.price, psi.delay, rp.name AS supplier
+            FROM product_supplierinfo psi
+            JOIN res_partner rp ON rp.id = psi.partner_id
+            JOIN product_template pt ON pt.id = psi.product_tmpl_id
+            WHERE COALESCE(pt.name->>'en_US', pt.name::text) ILIKE :product
+              {supplier_clause}
+            ORDER BY psi.id
+            LIMIT 5
+            """,
+            params,
+        )
+
+        if infos:
+            for info in infos:
+                changes = []
+                if new_price is not None:
+                    changes.append(_change("price", float(info.get("price") or 0), round(float(new_price), 4), "Purchase price"))
+                if lead_time is not None:
+                    changes.append(_change("delay", info.get("delay"), int(lead_time), "Lead time (days)"))
+                records.append(
+                    _record(
+                        label=f"{product_name} / {info.get('supplier')}",
+                        operation="update",
+                        odoo_id=int(info["id"]),
+                        changes=changes,
+                    )
+                )
+        else:
+            changes = []
+            if new_price is not None:
+                changes.append(_change("price", None, round(float(new_price), 4), "Purchase price"))
+            if lead_time is not None:
+                changes.append(_change("delay", None, int(lead_time), "Lead time (days)"))
+            records.append(
+                _record(
+                    label=f"{product_name} / {supplier_name or 'any vendor'}",
+                    operation="create",
+                    changes=changes,
+                    metadata={"note": "No existing supplierinfo found; a new record will be created."},
+                )
+            )
+
+    return _preview(
+        odoo_model="product.supplierinfo",
+        operation="update_vendor_prices",
+        records=records,
+        expected_impact=[f"Updates purchase price/lead time on {len(records)} vendor price record(s)."],
+        risk_notes=[
+            "Only affects the recorded purchase price in Odoo; does not create a new purchase order.",
+            "If multiple vendors share the same product and no supplier filter is given, all rows update.",
+        ],
+    )
+
+
+def _preview_sale_order_cancel(payload: dict[str, Any]) -> dict[str, Any]:
+    order_names = [str(n) for n in (payload.get("order_names") or []) if n]
+    if not order_names:
+        return _preview(
+            odoo_model="sale.order",
+            operation="cancel_orders",
+            records=[],
+            expected_impact=["No orders specified."],
+            risk_notes=[],
+        )
+
+    params: dict[str, Any] = {}
+    placeholders: list[str] = []
+    for i, name in enumerate(order_names):
+        key = f"name_{i}"
+        params[key] = name
+        placeholders.append(f":{key}")
+
+    orders = _fetch_all(
+        f"""
+        SELECT so.id, so.name, so.state, so.amount_total,
+               so.date_order, rp.name AS customer
+        FROM sale_order so
+        JOIN res_partner rp ON rp.id = so.partner_id
+        WHERE so.name IN ({', '.join(placeholders)})
+        ORDER BY so.date_order
+        """,
+        params,
+    )
+
+    found_names = {str(o["name"]) for o in orders}
+    missing = [n for n in order_names if n not in found_names]
+
+    records = [
+        _record(
+            label=str(o.get("name")),
+            operation="cancel",
+            odoo_id=int(o["id"]),
+            changes=[
+                _change("state", o.get("state"), "cancel", "Status"),
+            ],
+            metadata={
+                "customer": o.get("customer"),
+                "date_order": str(o.get("date_order")),
+                "amount_total": float(o.get("amount_total") or 0),
+            },
+        )
+        for o in orders
+    ]
+
+    risk_notes = ["Cancellation creates a negative journal entry on confirmed orders (state='sale')."]
+    if missing:
+        risk_notes.append(f"Not found in DB: {', '.join(missing)}. Approval will skip these.")
+
+    return _preview(
+        odoo_model="sale.order",
+        operation="cancel_orders",
+        records=records,
+        expected_impact=[f"Cancels {len(orders)} sale order(s) with a combined value of ${sum(float(o.get('amount_total') or 0) for o in orders):,.2f}."],
+        risk_notes=risk_notes,
+        metadata={"missing_orders": missing},
     )

@@ -74,6 +74,9 @@ Write-back policy:
 - For POS pricelist changes, call propose_pos_pricelist; approval sets pricelist_id on the Main Store pos.config.
 - For email campaigns, call propose_email_campaign; approval creates a mailing.mailing in draft state.
 - For stock moves between locations, call propose_transfer_stock; approval creates a stock.picking of type Internal.
+- For correcting on-hand inventory counts (physical count discrepancy), call propose_inventory_adjustment; approval sets inventory_quantity on stock.quant and applies it.
+- For updating a supplier's purchase price or lead time in Odoo, call propose_vendor_price_update; approval writes product.supplierinfo records (creates if none exist).
+- For cancelling a sale order that should not be fulfilled, call propose_sale_order_cancel; approval calls action_cancel on sale.order (orders in state draft/sent/sale only).
 - Proposal tools do not write to Odoo. They only create pending actions for a human to approve or reject.
 - For "what if" discount questions, call simulate_discount_impact. It is advisory, read-only, and must not be described as an approved or pending Odoo change.
 - Approval cards include a server-built preview/diff. Do not ask the human to approve unless a proposal tool returned a pending action.

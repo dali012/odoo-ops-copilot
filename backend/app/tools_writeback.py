@@ -135,6 +135,75 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "propose_inventory_adjustment",
+        "description": (
+            "Draft a human-approval proposal to correct a product's on-hand quantity via a "
+            "physical inventory count (stock.quant adjustment). Use after sql_analytics or "
+            "odoo_query reveals a discrepancy between system quantity and actual count. "
+            "This does not write to Odoo - a human must approve first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "product":  {"type": "string", "description": "Product display name."},
+                "qty":      {"type": "number", "description": "Correct counted quantity (>= 0)."},
+                "location": {"type": "string", "default": "WH/Stock", "description": "Internal stock location name, e.g. 'WH/Stock'."},
+                "reason":   {"type": "string", "description": "Short data-backed justification."},
+            },
+            "required": ["product", "qty", "reason"],
+        },
+    },
+    {
+        "name": "propose_vendor_price_update",
+        "description": (
+            "Draft a human-approval proposal to update purchase price and/or lead time on "
+            "product.supplierinfo records. Use after supplier_scorecard finds price drift or "
+            "a supplier quote differs from Odoo's recorded price. "
+            "This does not write to Odoo - a human must approve first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "product":       {"type": "string", "description": "Product display name."},
+                            "supplier":      {"type": "string", "description": "Supplier name (optional; updates all vendors if omitted)."},
+                            "new_price":     {"type": "number", "description": "New purchase price per unit."},
+                            "lead_time_days":{"type": "integer", "description": "New lead time in days."},
+                        },
+                        "required": ["product"],
+                    },
+                },
+                "reason": {"type": "string", "description": "Short data-backed justification."},
+            },
+            "required": ["updates", "reason"],
+        },
+    },
+    {
+        "name": "propose_sale_order_cancel",
+        "description": (
+            "Draft a human-approval proposal to cancel one or more confirmed sale orders. "
+            "Only orders in draft / sent / sale state can be cancelled. "
+            "Use after verifying the order exists and cancellation is appropriate. "
+            "This does not write to Odoo - a human must approve first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Sale order reference(s), e.g. ['S00001', 'S00002'].",
+                },
+                "reason": {"type": "string", "description": "Short business justification."},
+            },
+            "required": ["order_names", "reason"],
+        },
+    },
+    {
         "name": "propose_transfer_stock",
         "description": (
             "Draft a human-approval proposal for an internal stock transfer between two locations. "
@@ -230,6 +299,56 @@ def propose_email_campaign(subject: str, body: str, segment: str, reason: str) -
     }
 
 
+def propose_inventory_adjustment(
+    product: str,
+    qty: float | int,
+    reason: str,
+    location: str = "WH/Stock",
+) -> dict[str, Any]:
+    return {
+        "action_type": "inventory_adjustment",
+        "title": f"Inventory adjustment: {product} → {float(qty):g} units",
+        "summary": reason,
+        "payload": {
+            "product":  product,
+            "location": location,
+            "qty":      float(qty),
+            "reason":   reason,
+        },
+    }
+
+
+def propose_vendor_price_update(updates: list[dict], reason: str) -> dict[str, Any]:
+    product_names = [str(u.get("product") or "") for u in updates]
+    normalized = []
+    for u in updates:
+        entry: dict[str, Any] = {"product": str(u["product"])}
+        if u.get("supplier"):
+            entry["supplier"] = str(u["supplier"])
+        if u.get("new_price") is not None:
+            entry["new_price"] = float(u["new_price"])
+        if u.get("lead_time_days") is not None:
+            entry["lead_time_days"] = int(u["lead_time_days"])
+        normalized.append(entry)
+    return {
+        "action_type": "vendor_price_update",
+        "title": f"Update vendor prices: {', '.join(product_names)}",
+        "summary": reason,
+        "payload": {"updates": normalized, "reason": reason},
+    }
+
+
+def propose_sale_order_cancel(order_names: list[str], reason: str) -> dict[str, Any]:
+    names = [str(n) for n in order_names]
+    label = ", ".join(names[:3]) + (f" +{len(names) - 3} more" if len(names) > 3 else "")
+    return {
+        "action_type": "sale_order_cancel",
+        "title": f"Cancel sale order(s): {label}",
+        "summary": reason,
+        "payload": {"order_names": names, "reason": reason},
+    }
+
+
 def propose_transfer_stock(
     product: str,
     qty: float | int,
@@ -252,10 +371,13 @@ def propose_transfer_stock(
 
 
 DISPATCH: dict[str, Any] = {
-    "propose_purchase_order":  propose_purchase_order,
-    "propose_invoice_reminder": propose_invoice_reminder,
-    "propose_price_update":    propose_price_update,
-    "propose_pos_pricelist":   propose_pos_pricelist,
-    "propose_email_campaign":  propose_email_campaign,
-    "propose_transfer_stock":  propose_transfer_stock,
+    "propose_purchase_order":     propose_purchase_order,
+    "propose_invoice_reminder":   propose_invoice_reminder,
+    "propose_price_update":       propose_price_update,
+    "propose_pos_pricelist":      propose_pos_pricelist,
+    "propose_email_campaign":     propose_email_campaign,
+    "propose_transfer_stock":     propose_transfer_stock,
+    "propose_inventory_adjustment": propose_inventory_adjustment,
+    "propose_vendor_price_update":  propose_vendor_price_update,
+    "propose_sale_order_cancel":    propose_sale_order_cancel,
 }

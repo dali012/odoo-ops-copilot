@@ -164,6 +164,9 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
                     "propose_purchase_order", "propose_invoice_reminder",
                     "propose_price_update", "propose_pos_pricelist",
                     "propose_email_campaign", "propose_transfer_stock",
+                    "propose_inventory_adjustment",
+                    "propose_vendor_price_update",
+                    "propose_sale_order_cancel",
                 } and "error" not in output:
                     try:
                         prepared_payload, preview = await asyncio.to_thread(
@@ -222,6 +225,9 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
                     "propose_purchase_order", "propose_invoice_reminder",
                     "propose_price_update", "propose_pos_pricelist",
                     "propose_email_campaign", "propose_transfer_stock",
+                    "propose_inventory_adjustment",
+                    "propose_vendor_price_update",
+                    "propose_sale_order_cancel",
                 }:
                     proposal = await asyncio.to_thread(
                         create_writeback_action,

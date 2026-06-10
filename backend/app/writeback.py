@@ -465,6 +465,146 @@ def execute_transfer_stock(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def execute_inventory_adjustment(payload: dict[str, Any]) -> dict[str, Any]:
+    product_name  = str(payload.get("product") or "")
+    location_name = str(payload.get("location") or "WH/Stock")
+    qty = float(payload["qty"]) if payload.get("qty") is not None else 0.0
+
+    if qty < 0:
+        raise WritebackError("Inventory adjustment quantity must be >= 0.")
+
+    pp = _product_variant(product_name)
+    pp_id = int(pp["id"])
+
+    location_id = _first_id(
+        "stock.location",
+        [["complete_name", "ilike", location_name], ["usage", "=", "internal"]],
+        label=f"location '{location_name}'",
+    )
+
+    quant_ids = odoo.execute(
+        "stock.quant",
+        "search",
+        [["product_id", "=", pp_id], ["location_id", "=", location_id]],
+        limit=1,
+    )
+    if quant_ids:
+        quant_id = int(quant_ids[0])
+        odoo.execute("stock.quant", "write", [quant_id], {"inventory_quantity": qty})
+    else:
+        quant_id = int(odoo.execute("stock.quant", "create", {
+            "product_id": pp_id,
+            "location_id": location_id,
+            "inventory_quantity": qty,
+        }))
+
+    odoo.execute("stock.quant", "action_apply_inventory", [quant_id])
+    return {"odoo_model": "stock.quant", "odoo_record_ids": [quant_id], "adjusted_qty": qty}
+
+
+def execute_vendor_price_update(payload: dict[str, Any]) -> dict[str, Any]:
+    updates = payload.get("updates") or []
+    if not updates:
+        raise WritebackError("Vendor price update has no items.")
+
+    record_ids: list[int] = []
+    changes: list[dict[str, Any]] = []
+
+    for update in updates:
+        product_name  = str(update.get("product") or "")
+        supplier_name = update.get("supplier")
+        new_price     = update.get("new_price")
+        lead_time     = update.get("lead_time_days")
+
+        if new_price is None and lead_time is None:
+            raise WritebackError(f"Item for '{product_name}' needs new_price or lead_time_days.")
+
+        tmpl_id = _product_template_id(product_name)
+        domain: list[Any] = [["product_tmpl_id", "=", tmpl_id]]
+        partner_id: int | None = None
+        if supplier_name:
+            partner_id = _first_id(
+                "res.partner",
+                [["name", "ilike", supplier_name], ["supplier_rank", ">", 0]],
+                label=f"supplier '{supplier_name}'",
+            )
+            domain.append(["partner_id", "=", partner_id])
+
+        infos = odoo.search_read(
+            "product.supplierinfo",
+            domain=domain,
+            fields=["id", "partner_id", "price", "delay"],
+        )
+        vals: dict[str, Any] = {}
+        if new_price is not None:
+            vals["price"] = round(float(new_price), 4)
+        if lead_time is not None:
+            vals["delay"] = int(lead_time)
+
+        if infos:
+            for info in infos:
+                info_id = int(info["id"])
+                odoo.execute("product.supplierinfo", "write", [info_id], vals)
+                record_ids.append(info_id)
+                changes.append({
+                    "product":       product_name,
+                    "supplier":      info["partner_id"][1] if info.get("partner_id") else "unknown",
+                    "old_price":     float(info.get("price") or 0),
+                    "new_price":     vals.get("price", float(info.get("price") or 0)),
+                    "old_lead_days": info.get("delay"),
+                    "new_lead_days": vals.get("delay", info.get("delay")),
+                    "action":        "updated",
+                })
+        else:
+            create_vals: dict[str, Any] = {"product_tmpl_id": tmpl_id, **vals}
+            if partner_id is not None:
+                create_vals["partner_id"] = partner_id
+            new_id = int(odoo.execute("product.supplierinfo", "create", create_vals))
+            record_ids.append(new_id)
+            changes.append({
+                "product":    product_name,
+                "supplier":   supplier_name or "unknown",
+                "new_price":  vals.get("price"),
+                "new_lead_days": vals.get("delay"),
+                "action":     "created",
+            })
+
+    return {"odoo_model": "product.supplierinfo", "odoo_record_ids": record_ids, "changes": changes}
+
+
+def execute_sale_order_cancel(payload: dict[str, Any]) -> dict[str, Any]:
+    order_names = [str(n) for n in (payload.get("order_names") or []) if n]
+    if not order_names:
+        raise WritebackError("Sale order cancel has no order references.")
+
+    cancelled_ids: list[int] = []
+    skipped: list[str] = []
+
+    for name in order_names:
+        ids = odoo.execute(
+            "sale.order",
+            "search",
+            [["name", "=", name], ["state", "in", ["draft", "sent", "sale"]]],
+            limit=1,
+        )
+        if not ids:
+            skipped.append(f"{name}: not found or already in non-cancellable state")
+            continue
+        order_id = int(ids[0])
+        odoo.execute("sale.order", "action_cancel", [order_id])
+        cancelled_ids.append(order_id)
+
+    if not cancelled_ids:
+        raise WritebackError(f"No orders cancelled. Issues: {'; '.join(skipped)}")
+
+    return {
+        "odoo_model": "sale.order",
+        "odoo_record_ids": cancelled_ids,
+        "cancelled_count": len(cancelled_ids),
+        "skipped": skipped,
+    }
+
+
 def execute_writeback(action_id: str) -> dict[str, Any]:
     action = _get_pending_action(action_id)
 
@@ -490,6 +630,12 @@ def execute_writeback(action_id: str) -> dict[str, Any]:
             result = execute_email_campaign(payload)
         elif action["action_type"] == "transfer_stock":
             result = execute_transfer_stock(payload)
+        elif action["action_type"] == "inventory_adjustment":
+            result = execute_inventory_adjustment(payload)
+        elif action["action_type"] == "vendor_price_update":
+            result = execute_vendor_price_update(payload)
+        elif action["action_type"] == "sale_order_cancel":
+            result = execute_sale_order_cancel(payload)
         else:
             raise WritebackError(f"Unsupported write-back action type: {action['action_type']}.")
     except Exception as exc:
