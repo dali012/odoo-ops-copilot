@@ -57,6 +57,11 @@ SQL patterns:
 - Use date filters on sale_order.date_order, for example sale_order.date_order >= now() - interval '90 days'.
 - Do not invent Odoo tables such as products, orders, order_lines, inventory, or categories.
 
+Analytical tool selection:
+- For dead stock, slow-moving items, unsold inventory, or clearance candidates: call inventory_aging. Pairs directly with propose_discount_rule.
+- For margin, profitability, or pricing questions: call margin_analysis before propose_price_update to ground the recommendation in data.
+- For supplier performance, fill rate, delivery reliability, or choosing between suppliers: call supplier_scorecard before propose_purchase_order.
+
 Write-back policy:
 - Never claim a write happened unless a human approved it.
 - For discounts, call propose_discount_rule to draft an approval card; approval creates product.pricelist.item records.

@@ -314,6 +314,80 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "inventory_aging",
+        "description": (
+            "Find products that have stock on hand but no confirmed sales in the last N days. "
+            "Returns qty on hand, days since last sale, and stock value at cost, ranked by "
+            "stock value. Use for dead-stock identification before calling propose_discount_rule."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days_threshold": {
+                    "type": "integer",
+                    "default": 60,
+                    "description": "Consider a product stale if it has had no confirmed sales in this many days.",
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "description": "Optional: filter to a single product category name.",
+                },
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+    },
+    {
+        "name": "margin_analysis",
+        "description": (
+            "Calculate gross margin per product or category from confirmed sales over a "
+            "lookback period. Returns revenue, cost, gross_profit, margin_pct, avg list "
+            "price, and avg selling price. Use before propose_price_update to justify "
+            "pricing decisions, or to answer profitability questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": ["string", "null"],
+                    "description": "Optional: filter to a single product category.",
+                },
+                "period_days": {
+                    "type": "integer",
+                    "default": 90,
+                    "description": "Lookback period in days.",
+                },
+                "group_by": {
+                    "type": "string",
+                    "enum": ["product", "category"],
+                    "default": "product",
+                    "description": "'product' for per-SKU breakdown, 'category' for high-level view.",
+                },
+            },
+        },
+    },
+    {
+        "name": "supplier_scorecard",
+        "description": (
+            "Evaluate supplier performance: total orders, spend, fill rate (qty received vs "
+            "ordered), expected lead time, and number of products sourced. Use before "
+            "propose_purchase_order to compare suppliers or answer delivery/reliability questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "supplier": {
+                    "type": ["string", "null"],
+                    "description": "Optional: filter to a specific supplier name (partial match).",
+                },
+                "months": {
+                    "type": "integer",
+                    "default": 6,
+                    "description": "Number of months of purchase history to analyse.",
+                },
+            },
+        },
+    },
+    {
         "name": "propose_restock_rule",
         "description": (
             "Draft a human-approval write-back proposal for manual Odoo reordering rules. "
@@ -523,6 +597,209 @@ def simulate_discount_impact(
     }
 
 
+def inventory_aging(
+    days_threshold: int = 60,
+    category: str | None = None,
+    limit: int = 20,
+) -> dict:
+    params: dict[str, object] = {"days": int(days_threshold), "limit": int(limit)}
+    category_filter = ""
+    if category:
+        params["category"] = category
+        category_filter = "AND pc.name = :category"
+
+    sql = text(f"""
+        WITH stock AS (
+            SELECT pp.product_tmpl_id,
+                   SUM(sq.quantity) AS qty_on_hand
+            FROM stock_quant sq
+            JOIN product_product pp ON pp.id = sq.product_id
+            JOIN stock_location sl ON sl.id = sq.location_id
+            WHERE sl.usage = 'internal'
+            GROUP BY pp.product_tmpl_id
+            HAVING SUM(sq.quantity) > 0
+        ),
+        last_sold AS (
+            SELECT pp.product_tmpl_id,
+                   MAX(so.date_order) AS last_sold_date
+            FROM sale_order_line sol
+            JOIN sale_order so ON so.id = sol.order_id
+            JOIN product_product pp ON pp.id = sol.product_id
+            WHERE so.state IN ('sale', 'done')
+            GROUP BY pp.product_tmpl_id
+        )
+        SELECT
+            COALESCE(pt.name->>'en_US', pt.name::text) AS product,
+            pc.name AS category,
+            ROUND(s.qty_on_hand::numeric, 2) AS qty_on_hand,
+            ls.last_sold_date::date AS last_sold_date,
+            CASE
+                WHEN ls.last_sold_date IS NULL THEN NULL
+                ELSE EXTRACT(DAY FROM NOW() - ls.last_sold_date)::int
+            END AS days_since_last_sale,
+            ROUND((s.qty_on_hand * pt.standard_price)::numeric, 2) AS stock_value
+        FROM stock s
+        JOIN product_template pt ON pt.id = s.product_tmpl_id
+        JOIN product_category pc ON pc.id = pt.categ_id
+        LEFT JOIN last_sold ls ON ls.product_tmpl_id = s.product_tmpl_id
+        WHERE (
+            ls.last_sold_date IS NULL
+            OR ls.last_sold_date < NOW() - (:days || ' days')::interval
+        )
+        {category_filter}
+        ORDER BY stock_value DESC NULLS LAST
+        LIMIT :limit
+    """)
+
+    with _get_engine().connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL TRANSACTION READ ONLY"))
+            conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
+            df = pd.read_sql_query(sql, conn, params=params)
+
+    records = df.to_dict(orient="records")
+    total_value = float(df["stock_value"].sum()) if not df.empty else 0.0
+    return {
+        "rows": records,
+        "row_count": len(records),
+        "total_aging_stock_value": round(total_value, 2),
+        "days_threshold": days_threshold,
+        "note": (
+            f"Products with internal stock but no confirmed sales in the last "
+            f"{days_threshold} days, ranked by stock value at cost."
+        ),
+    }
+
+
+def margin_analysis(
+    category: str | None = None,
+    period_days: int = 90,
+    group_by: str = "product",
+) -> dict:
+    if group_by not in ("product", "category"):
+        group_by = "product"
+
+    params: dict[str, object] = {"days": int(period_days)}
+    category_filter = ""
+    if category:
+        params["category"] = category
+        category_filter = "AND pc.name = :category"
+
+    if group_by == "category":
+        select_name = "pc.name AS name"
+        group_expr = "pc.name"
+        extra_col = ""
+    else:
+        select_name = "COALESCE(pt.name->>'en_US', pt.name::text) AS name"
+        group_expr = "pt.id, COALESCE(pt.name->>'en_US', pt.name::text), pc.name"
+        extra_col = ", pc.name AS category"
+
+    sql = text(f"""
+        SELECT
+            {select_name}
+            {extra_col},
+            ROUND(SUM(sol.product_uom_qty)::numeric, 1) AS units_sold,
+            ROUND(SUM(sol.price_unit * sol.product_uom_qty)::numeric, 2) AS revenue,
+            ROUND(SUM(pt.standard_price * sol.product_uom_qty)::numeric, 2) AS cost,
+            ROUND((
+                SUM(sol.price_unit * sol.product_uom_qty) -
+                SUM(pt.standard_price * sol.product_uom_qty)
+            )::numeric, 2) AS gross_profit,
+            ROUND(
+                CASE
+                    WHEN SUM(sol.price_unit * sol.product_uom_qty) = 0 THEN 0
+                    ELSE (
+                        1 - SUM(pt.standard_price * sol.product_uom_qty) /
+                            NULLIF(SUM(sol.price_unit * sol.product_uom_qty), 0)
+                    ) * 100
+                END::numeric, 1
+            ) AS margin_pct,
+            ROUND(AVG(pt.list_price)::numeric, 2) AS avg_list_price,
+            ROUND(AVG(sol.price_unit)::numeric, 2) AS avg_selling_price
+        FROM sale_order_line sol
+        JOIN sale_order so ON so.id = sol.order_id
+        JOIN product_product pp ON pp.id = sol.product_id
+        JOIN product_template pt ON pt.id = pp.product_tmpl_id
+        JOIN product_category pc ON pc.id = pt.categ_id
+        WHERE so.state IN ('sale', 'done')
+          AND so.date_order >= NOW() - (:days || ' days')::interval
+          {category_filter}
+        GROUP BY {group_expr}
+        ORDER BY gross_profit DESC
+        LIMIT 50
+    """)
+
+    with _get_engine().connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL TRANSACTION READ ONLY"))
+            conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
+            df = pd.read_sql_query(sql, conn, params=params)
+
+    return {
+        "rows": df.to_dict(orient="records"),
+        "row_count": len(df),
+        "group_by": group_by,
+        "period_days": period_days,
+        "note": "Cost uses product.standard_price at query time; margins are indicative, not accounting truth.",
+    }
+
+
+def supplier_scorecard(
+    supplier: str | None = None,
+    months: int = 6,
+) -> dict:
+    params: dict[str, object] = {"months": int(months)}
+    supplier_filter = ""
+    if supplier:
+        params["supplier"] = f"%{supplier}%"
+        supplier_filter = "AND rp.name ILIKE :supplier"
+
+    sql = text(f"""
+        SELECT
+            rp.name AS supplier,
+            COUNT(DISTINCT po.id) AS total_orders,
+            ROUND(SUM(pol.qty_received * pol.price_unit)::numeric, 2) AS total_spend,
+            ROUND(
+                (SUM(pol.qty_received) / NULLIF(SUM(pol.product_qty), 0) * 100)::numeric, 1
+            ) AS fill_rate_pct,
+            ROUND(AVG(
+                CASE
+                    WHEN po.date_planned IS NOT NULL AND po.date_order IS NOT NULL
+                    THEN EXTRACT(DAY FROM po.date_planned - po.date_order)
+                END
+            )::numeric, 1) AS avg_expected_lead_days,
+            COUNT(DISTINCT pp.product_tmpl_id) AS products_sourced,
+            ROUND(AVG(pol.price_unit)::numeric, 2) AS avg_unit_price
+        FROM purchase_order po
+        JOIN res_partner rp ON rp.id = po.partner_id
+        JOIN purchase_order_line pol ON pol.order_id = po.id
+        JOIN product_product pp ON pp.id = pol.product_id
+        WHERE po.state IN ('purchase', 'done')
+          AND po.date_order >= NOW() - (:months || ' months')::interval
+          {supplier_filter}
+        GROUP BY rp.id, rp.name
+        ORDER BY total_spend DESC
+        LIMIT 20
+    """)
+
+    with _get_engine().connect() as conn:
+        with conn.begin():
+            conn.execute(text("SET LOCAL TRANSACTION READ ONLY"))
+            conn.execute(text(f"SET LOCAL statement_timeout = {SQL_TIMEOUT_MS}"))
+            df = pd.read_sql_query(sql, conn, params=params)
+
+    return {
+        "rows": df.to_dict(orient="records"),
+        "row_count": len(df),
+        "months": months,
+        "note": (
+            "fill_rate_pct = qty_received / qty_ordered × 100. "
+            "avg_expected_lead_days = date_planned − date_order (planned, not actual). "
+            "total_spend = received qty × unit price."
+        ),
+    }
+
+
 def propose_discount_rule(products, discount_percent, reason, min_quantity=1):
     return {
         "action_type": "discount_rule",
@@ -563,6 +840,9 @@ DISPATCH = {
     "sql_analytics": sql_analytics,
     "forecast_demand": forecast_demand,
     "simulate_discount_impact": simulate_discount_impact,
+    "inventory_aging": inventory_aging,
+    "margin_analysis": margin_analysis,
+    "supplier_scorecard": supplier_scorecard,
     "propose_discount_rule": propose_discount_rule,
     "propose_restock_rule": propose_restock_rule,
 }
