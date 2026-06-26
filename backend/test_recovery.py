@@ -2,6 +2,7 @@ import unittest
 
 from app.recovery import (
     RecoveryTracker,
+    apply_recovery,
     build_retry_hint,
     empty_result_note,
     is_empty_result,
@@ -80,6 +81,41 @@ class RetryHintTests(unittest.TestCase):
         hint = build_retry_hint("sql_analytics", "still broken", exhausted=True).lower()
         self.assertIn("do not", hint)
         self.assertTrue("explain" in hint or "limitation" in hint)
+
+
+class ApplyRecoveryTests(unittest.TestCase):
+    def test_error_adds_retry_guidance_and_returns_attempt(self):
+        tracker = RecoveryTracker()
+        output = {"error": "column bad does not exist"}
+        attempt, recovered = apply_recovery(tracker, "sql_analytics", output)
+        self.assertEqual(attempt, 1)
+        self.assertFalse(recovered)
+        self.assertIn("retry_guidance", output)
+
+    def test_success_after_error_returns_recovered(self):
+        tracker = RecoveryTracker()
+        apply_recovery(tracker, "sql_analytics", {"error": "boom"})
+        attempt, recovered = apply_recovery(
+            tracker, "sql_analytics", {"row_count": 3, "rows": [{}]}
+        )
+        self.assertEqual(attempt, 2)
+        self.assertTrue(recovered)
+
+    def test_empty_result_adds_note_but_no_guidance(self):
+        tracker = RecoveryTracker()
+        output = {"row_count": 0, "rows": []}
+        apply_recovery(tracker, "sql_analytics", output)
+        self.assertIn("note", output)
+        self.assertNotIn("retry_guidance", output)
+
+    def test_successful_nonempty_result_is_untouched(self):
+        tracker = RecoveryTracker()
+        output = {"row_count": 2, "rows": [{}, {}]}
+        attempt, recovered = apply_recovery(tracker, "sql_analytics", output)
+        self.assertEqual(attempt, 1)
+        self.assertFalse(recovered)
+        self.assertNotIn("note", output)
+        self.assertNotIn("retry_guidance", output)
 
 
 if __name__ == "__main__":

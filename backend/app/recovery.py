@@ -85,3 +85,27 @@ def build_retry_hint(name: str, error: str, *, exhausted: bool) -> str:
         f"The {name} call failed. Review the error, correct the arguments, and try "
         "once more. If it fails again, explain the issue to the user instead of retrying."
     )
+
+
+def apply_recovery(tracker: RecoveryTracker, name: str, output: dict) -> tuple[int, bool]:
+    """Apply the recovery policy to a tool's parsed output, mutating it in place.
+
+    On error: records the failure and appends ``retry_guidance`` for the model.
+    On an empty read result: appends a soft ``note``.
+    Returns ``(attempt_number_that_ran, recovered)`` for trace labelling.
+
+    Shared by both the streaming loop and the sync ``chat`` loop so they recover
+    identically.
+    """
+    attempt = tracker.attempt_number(name)
+    recovered = False
+    if "error" in output:
+        tracker.record_error(name)
+        output["retry_guidance"] = build_retry_hint(
+            name, str(output["error"]), exhausted=tracker.budget_exhausted(name)
+        )
+    else:
+        recovered = tracker.record_success(name)
+        if is_empty_result(name, output):
+            output["note"] = empty_result_note(name)
+    return attempt, recovered

@@ -497,7 +497,15 @@ def execute_inventory_adjustment(payload: dict[str, Any]) -> dict[str, Any]:
             "inventory_quantity": qty,
         }))
 
-    odoo.execute("stock.quant", "action_apply_inventory", [quant_id])
+    try:
+        odoo.execute("stock.quant", "action_apply_inventory", [quant_id])
+    except Exception as exc:
+        # action_apply_inventory returns None. Odoo 18's XML-RPC marshaller has
+        # allow_none disabled, so it raises while serializing the response — but
+        # the ORM transaction has already committed the adjustment. Tolerate only
+        # that specific marshalling fault.
+        if "marshal None" not in str(exc):
+            raise
     return {"odoo_model": "stock.quant", "odoo_record_ids": [quant_id], "adjusted_qty": qty}
 
 

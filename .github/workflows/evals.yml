@@ -78,6 +78,11 @@ jobs:
       - name: Run golden-question eval
         run: docker compose run --rm backend python -m app.eval_harness --fail-under 0.85 --json
 
+      # Runs last: these execute writebacks (and the live SQL row-cap check)
+      # against the seeded stack, mutating data, so they follow the eval.
+      - name: Live writeback + guardrail tests (Odoo 18)
+        run: docker compose run --rm -e RUN_LIVE_TESTS=1 backend python -m unittest test_writeback_live test_sql_guardrails -v
+
       - name: Tear down
         if: always()
         run: docker compose down -v

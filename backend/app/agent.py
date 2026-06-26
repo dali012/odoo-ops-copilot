@@ -11,12 +11,7 @@ from anthropic import Anthropic, AsyncAnthropic, BadRequestError
 
 from .config import config
 from .evidence import build_tool_evidence
-from .recovery import (
-    RecoveryTracker,
-    build_retry_hint,
-    empty_result_note,
-    is_empty_result,
-)
+from .recovery import RecoveryTracker, apply_recovery
 from .schema_context import build_system_prompt
 from .session_store import (
     append_turn,
@@ -54,6 +49,7 @@ MAX_TURNS = 6
 
 def chat(message: str) -> str:
     messages = [{"role": "user", "content": message}]
+    tracker = RecoveryTracker()
 
     try:
         for _ in range(MAX_TURNS):
@@ -72,11 +68,18 @@ def chat(message: str) -> str:
             tool_results = []
             for block in resp.content:
                 if block.type == "tool_use":
-                    output = run_tool(block.name, block.input)
+                    output_str = run_tool(block.name, block.input)
+                    try:
+                        output = json.loads(output_str)
+                    except json.JSONDecodeError:
+                        output = {"error": output_str}
+                    # Same bounded recovery policy as the streaming loop: feed a
+                    # hint back on error, nudge on empty results.
+                    apply_recovery(tracker, block.name, output)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": output,
+                        "content": json.dumps(output, default=str),
                     })
             messages.append({"role": "user", "content": tool_results})
 
@@ -204,22 +207,10 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
                     summary=tool_summary,
                 )
 
-                # Bounded, visible error recovery: on failure feed an actionable
-                # hint back to the model (capped at one retry), nudge on empty
-                # results, and label retries / recoveries in the trace.
-                attempt = tracker.attempt_number(block.name)
-                recovered = False
-                if "error" in output:
-                    tracker.record_error(block.name)
-                    output["retry_guidance"] = build_retry_hint(
-                        block.name,
-                        str(output["error"]),
-                        exhausted=tracker.budget_exhausted(block.name),
-                    )
-                else:
-                    recovered = tracker.record_success(block.name)
-                    if is_empty_result(block.name, output):
-                        output["note"] = empty_result_note(block.name)
+                # Bounded, visible error recovery: feed a hint back on failure
+                # (capped at one retry), nudge on empty results, and label
+                # retries / recoveries in the trace.
+                attempt, recovered = apply_recovery(tracker, block.name, output)
 
                 result_event: dict = {"type": "tool_result", "name": block.name}
                 persisted_tool_event: dict = {
