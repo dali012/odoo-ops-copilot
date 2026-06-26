@@ -377,7 +377,6 @@ def execute_pos_pricelist(payload: dict[str, Any]) -> dict[str, Any]:
 def execute_email_campaign(payload: dict[str, Any]) -> dict[str, Any]:
     subject = str(payload.get("subject") or "")
     body_html = str(payload.get("body_html") or "")
-    segment = str(payload.get("segment") or "all_customers")
 
     if not subject:
         raise WritebackError("Email campaign proposal is missing a subject.")

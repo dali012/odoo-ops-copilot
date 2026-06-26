@@ -1,0 +1,23 @@
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes (unused imports/vars, undefined names).
+# Line length (E501) is intentionally not enforced — several SQL strings are long.
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally import modules after in-test setup/scaffolding.
+"test_*.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+# Live tests (real Postgres/Odoo/Anthropic) are guarded by RUN_LIVE_TESTS=1 and
+# skip automatically otherwise, so the default run is fully offline.
+addopts = "-q"
+markers = [
+    "live: requires a live seeded stack (Postgres/Odoo/Anthropic); set RUN_LIVE_TESTS=1",
+]

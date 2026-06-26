@@ -1,0 +1,4 @@
+# Dev/CI-only dependencies (not needed at runtime).
+-r requirements.txt
+pytest==8.*
+ruff==0.15.*

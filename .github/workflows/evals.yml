@@ -1,0 +1,80 @@
+name: evals
+
+# Full agent eval: boots Postgres + Odoo, installs modules, seeds the demo
+# dataset, then runs the 12 golden questions against the REAL agent (live
+# Anthropic API). This costs API credits, so it runs nightly and on demand
+# rather than on every push.
+#
+# Requirements (one-time):
+#   - Repository secret ANTHROPIC_API_KEY must be set
+#     (Settings → Secrets and variables → Actions → New repository secret).
+#
+# Notes for maintainers: the Odoo module list and seed/eval timing below were
+# wired from the README's local-setup steps. If the seed or eval fails, check
+# (1) the module technical names, (2) that Odoo finished booting before seeding,
+# and (3) that the seed completes before the eval starts.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC nightly
+  workflow_dispatch:       # manual "Run workflow" button
+
+permissions:
+  contents: read
+
+jobs:
+  agent-eval:
+    name: golden-question eval (live stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env for compose
+        run: |
+          cat > .env <<EOF
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          ODOO_URL=http://odoo:8069
+          ODOO_DB=odoo_copilot
+          ODOO_USERNAME=admin
+          ODOO_PASSWORD=admin
+          PG_HOST=db
+          PG_PORT=5432
+          PG_DB=odoo_copilot
+          PG_USER=odoo
+          PG_PASSWORD=odoo
+          DEMO_MODE=true
+          EOF
+
+      - name: Start Postgres
+        run: docker compose up -d db
+
+      - name: Initialise Odoo database + install modules
+        run: |
+          docker compose run --rm odoo \
+            odoo -d odoo_copilot \
+                 -i base,sale_management,stock,account,purchase,point_of_sale,mass_mailing \
+                 --without-demo=all --stop-after-init
+
+      - name: Start Odoo
+        run: docker compose up -d odoo
+
+      - name: Wait for Odoo to be healthy
+        run: |
+          for i in $(seq 1 40); do
+            if docker compose ps odoo | grep -q "healthy"; then
+              echo "Odoo is healthy"; exit 0
+            fi
+            echo "waiting for Odoo... ($i)"; sleep 15
+          done
+          echo "Odoo did not become healthy in time"; docker compose logs odoo; exit 1
+
+      - name: Seed demo dataset
+        run: docker compose run --rm backend python -m app.seed
+
+      - name: Run golden-question eval
+        run: docker compose run --rm backend python -m app.eval_harness --fail-under 0.85 --json
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

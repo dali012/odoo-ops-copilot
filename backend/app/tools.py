@@ -1252,7 +1252,7 @@ def compare_periods(
     if metric == "revenue":
         agg_tmpl = f"ROUND(COALESCE(SUM({rev_expr}) {{f}}, 0)::numeric, 2)"
     elif metric == "units":
-        agg_tmpl = f"ROUND(COALESCE(SUM(sol.product_uom_qty) {{f}}, 0)::numeric, 1)"
+        agg_tmpl = f"ROUND(COALESCE(SUM(sol.product_uom_qty) {{f}}, 0)::numeric, 1)"  # noqa: F541
     elif metric == "orders":
         agg_tmpl = "COUNT(DISTINCT so.id) {f}"
     elif metric == "margin":

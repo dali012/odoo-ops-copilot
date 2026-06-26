@@ -1,5 +1,4 @@
 import unittest
-from datetime import date
 from unittest.mock import call
 from unittest.mock import patch
 

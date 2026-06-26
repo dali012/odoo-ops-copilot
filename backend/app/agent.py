@@ -9,8 +9,6 @@ from collections.abc import AsyncGenerator
 
 from anthropic import Anthropic, AsyncAnthropic, BadRequestError
 
-log = logging.getLogger(__name__)
-
 from .config import config
 from .evidence import build_tool_evidence
 from .schema_context import build_system_prompt
@@ -25,6 +23,8 @@ from .tools import DISPATCH as _ANALYTICS_DISPATCH
 from .tools_writeback import TOOL_SCHEMAS as _WRITEBACK_SCHEMAS
 from .tools_writeback import DISPATCH as _WRITEBACK_DISPATCH
 from .writeback_preview import prepare_writeback_action
+
+log = logging.getLogger(__name__)
 
 TOOL_SCHEMAS = _ANALYTICS_SCHEMAS + _WRITEBACK_SCHEMAS
 _COMBINED_DISPATCH = {**_ANALYTICS_DISPATCH, **_WRITEBACK_DISPATCH}
@@ -272,7 +272,7 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
         )
         await persist_turn(msg, "error")
         yield sse({"type": "error", "message": msg})
-    except Exception as exc:
+    except Exception:
         log.exception("stream_chat unhandled error")
         msg = "An internal error occurred."
         await persist_turn(msg, "error")

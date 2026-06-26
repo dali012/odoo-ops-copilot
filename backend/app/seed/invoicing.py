@@ -66,7 +66,7 @@ def _register_payment_and_reconcile(
         ["account_id", "in", receivable_ids],
     ], ["id"])
 
-    all_ids = [l["id"] for l in inv_lines + pay_lines]
+    all_ids = [line["id"] for line in inv_lines + pay_lines]
     if all_ids:
         try:
             odoo.execute("account.move.line", "reconcile", all_ids)

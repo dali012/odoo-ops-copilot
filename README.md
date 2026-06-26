@@ -1,5 +1,11 @@
 # Odoo Ops Copilot
 
+[![CI](https://github.com/dali012/odoo-ops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/dali012/odoo-ops-copilot/actions/workflows/ci.yml)
+[![evals](https://github.com/dali012/odoo-ops-copilot/actions/workflows/evals.yml/badge.svg)](https://github.com/dali012/odoo-ops-copilot/actions/workflows/evals.yml)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+[![Next.js 16](https://img.shields.io/badge/next.js-16-black.svg)](https://nextjs.org/)
+
 An AI operations copilot for a live Odoo ERP. It answers natural-language business questions, grounds answers in Odoo data, forecasts demand, analyses margin and stockout risk, segments customers by RFM, compares periods side-by-side, and drafts human-approved write-backs — purchase orders, reorder rules, discounts, price updates, vendor price corrections, inventory adjustments, sale order cancellations, POS pricing changes, invoice follow-ups, email campaigns, and stock transfers.
 
 **Live demo:** _coming soon — deploying to VPS_
@@ -10,6 +16,28 @@ An AI operations copilot for a live Odoo ERP. It answers natural-language busine
 https://github.com/user-attachments/assets/ace18a8e-8f72-45f9-8acf-3e6f4c15bcbf
 
 ---
+
+## Results
+
+The numbers behind the claims — all reproducible from this repo:
+
+| Metric | Result | Reproduce |
+| ------ | ------ | --------- |
+| Golden-question eval pass rate | **12 / 12 (100%)** | `python -m app.eval_harness` |
+| Forecast accuracy (6-month holdout) | **MAPE `<pending: run backtest>`% · RMSE `<pending>`** | `python -m app.backtest_forecast --holdout 6` |
+| Offline test suite (guardrails, graders, forecast metrics) | **55 tests** | `pytest` in `backend/` |
+| Frontend test suite | **19 tests** | `npx jest` in `frontend/` |
+
+**Forecasting is real, not decorative.** The MAPE/RMSE figures come from a true
+holdout backtest: for each product category the seasonal model is fit on all but
+the trailing 6 months, then scored against the months it never saw (the same
+`statsmodels` model `forecast_demand` uses in production). The metric math
+(`mape`, `rmse`) is unit-tested in `backend/test_backtest_forecast.py`.
+
+**SQL guardrails are the security story.** The table allowlist, single-statement
+SELECT-only parser, read-only transaction, and hard row cap are each covered by
+tests in `backend/test_sql_guardrails.py` — the guardrails are proven to hold,
+not just asserted in prose.
 
 ## What It Does
 
@@ -155,11 +183,20 @@ The full stack runs on a single VPS behind Nginx. Copy `.env.example` to `.env`,
 
 ## Useful Commands
 
-Backend tests:
+Backend tests (offline — no Odoo/Postgres/API needed):
 
 ```bash
 cd backend
-python -m unittest test_writeback.py test_sql_guardrails.py test_session_store.py test_eval_harness.py
+pytest
+```
+
+Forecast holdout backtest (MAPE/RMSE — needs the seeded database):
+
+```bash
+cd backend
+python -m app.backtest_forecast --holdout 6
+# Single category, machine-readable:
+python -m app.backtest_forecast --category Outerwear --json
 ```
 
 Frontend checks:

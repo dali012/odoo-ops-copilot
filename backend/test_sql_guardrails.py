@@ -1,6 +1,9 @@
+import os
 import unittest
 
 from app.tools import SQL_ROW_CAP, cap_sql, extract_sql_tables, sql_analytics, validate_sql
+
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS") == "1"
 
 
 class SqlGuardrailTests(unittest.TestCase):
@@ -60,6 +63,7 @@ class SqlGuardrailTests(unittest.TestCase):
             f"SELECT * FROM (SELECT * FROM product_template) AS guarded_query LIMIT {SQL_ROW_CAP}",
         )
 
+    @unittest.skipUnless(RUN_LIVE_TESTS, "requires a live seeded Postgres; set RUN_LIVE_TESTS=1")
     def test_live_query_applies_row_cap(self):
         result = sql_analytics("SELECT * FROM sale_order_line ORDER BY id")
 
