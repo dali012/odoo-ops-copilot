@@ -72,6 +72,9 @@ jobs:
       - name: Seed demo dataset
         run: docker compose run --rm backend python -m app.seed
 
+      - name: Forecast holdout backtest (MAPE/RMSE)
+        run: docker compose run --rm backend python -m app.backtest_forecast --holdout 6 --json
+
       - name: Run golden-question eval
         run: docker compose run --rm backend python -m app.eval_harness --fail-under 0.85 --json
 
