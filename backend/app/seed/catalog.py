@@ -54,7 +54,10 @@ def seed_catalog() -> dict[str, Any]:
                     "categ_id": cat_ids[cat],
                     "sale_ok": True,
                     "purchase_ok": True,
-                    "type": "product",  # storable - required for stock moves
+                    # Odoo 18: storable = type 'consu' + is_storable=True
+                    # (the old type='product' value was removed in 18.0).
+                    "type": "consu",
+                    "is_storable": True,
                 },
             )
             pp_ids = odoo.execute(
