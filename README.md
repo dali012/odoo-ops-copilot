@@ -197,4 +197,8 @@ On public deployments, set `DEMO_MODE=true` to return `403 Forbidden` on all app
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+This project is licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE).
+
+Copyright © 2025–2026 dali012.
+
+AGPL-3.0 keeps the source open and inspectable, but requires anyone who runs a modified version as a network service to publish their changes under the same license. **If those terms don't fit your deployment, a separate commercial license is available** — get in touch via [dali012.me](https://dali012.me).
