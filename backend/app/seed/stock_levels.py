@@ -77,7 +77,15 @@ def seed_stockout_signal() -> None:
             "location_id": location_id,
             "inventory_quantity": 0.0,
         }))
-    odoo.execute("stock.quant", "action_apply_inventory", [quant_id])
+    try:
+        odoo.execute("stock.quant", "action_apply_inventory", [quant_id])
+    except Exception as exc:
+        # action_apply_inventory returns None. Odoo's XML-RPC marshaller has
+        # allow_none disabled, so it raises while serializing the response —
+        # but the ORM transaction has already committed the adjustment, so the
+        # on-hand quantity is set regardless. Tolerate only that specific case.
+        if "marshal None" not in str(exc):
+            raise
 
     name_rows = odoo.search_read("product.product", [["id", "=", pp_id]], ["display_name"])
     name = name_rows[0]["display_name"] if name_rows else pp_id
