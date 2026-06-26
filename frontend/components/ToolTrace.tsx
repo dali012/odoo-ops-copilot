@@ -249,12 +249,24 @@ function ToolRow({
   onWritebackDecision: (actionId: string, decision: "approve" | "reject") => void;
 }) {
   const isRunning = event.status === "running";
-  const ledColor = isRunning ? "var(--ds-amber-400)" : "var(--ds-green-400)";
+  const hasError = Boolean(event.error);
+  const ledColor = hasError || isRunning ? "var(--ds-amber-400)" : "var(--ds-green-400)";
+  const statusColor = hasError || isRunning ? "var(--ds-amber-400)" : "var(--ds-green-400)";
   const statusLabel = isRunning
     ? "running..."
-    : event.rowCount !== undefined
-      ? `done - ${event.rowCount} rows`
-      : "done";
+    : hasError
+      ? "error"
+      : event.rowCount !== undefined
+        ? `done - ${event.rowCount} rows`
+        : "done";
+
+  const chipStyle = {
+    fontSize: "9px",
+    fontFamily: "var(--font-geist-mono)",
+    border: "1px solid var(--ds-border)",
+    borderRadius: "4px",
+    padding: "1px 5px",
+  } as const;
 
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: "9px" }}>
@@ -270,7 +282,7 @@ function ToolRow({
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
           <span
             style={{
               fontFamily: "var(--font-geist-mono)",
@@ -280,15 +292,32 @@ function ToolRow({
           >
             {event.name}
           </span>
-          <span
+          <span style={{ fontSize: "10px", color: statusColor }}>{statusLabel}</span>
+          {event.isRetry && (
+            <span style={{ ...chipStyle, color: "var(--ds-amber-400)" }}>
+              ↻ retry{event.attempt ? ` ${event.attempt}` : ""}
+            </span>
+          )}
+          {event.recovered && (
+            <span style={{ ...chipStyle, color: "var(--ds-green-400)" }}>recovered</span>
+          )}
+        </div>
+
+        {event.error && (
+          <div
             style={{
+              color: "var(--ds-amber-400)",
+              fontFamily: "var(--font-geist-mono)",
               fontSize: "10px",
-              color: isRunning ? "var(--ds-amber-400)" : "var(--ds-green-400)",
+              lineHeight: 1.5,
+              marginTop: "4px",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
             }}
           >
-            {statusLabel}
-          </span>
-        </div>
+            {event.error}
+          </div>
+        )}
 
         {event.name === "sql_analytics" && event.sql && (
           <SqlBlock sql={event.sql} />

@@ -21,12 +21,12 @@ https://github.com/user-attachments/assets/ace18a8e-8f72-45f9-8acf-3e6f4c15bcbf
 
 The numbers behind the claims — all reproducible from this repo:
 
-| Metric | Result | Reproduce |
-| ------ | ------ | --------- |
-| Golden-question eval pass rate | **12 / 12 (100%)** · CI-verified on a clean Odoo 18 seed | `python -m app.eval_harness` |
-| Forecast accuracy (6-month holdout, 4 categories pooled) | **MAPE 12.8% · RMSE 8.2** | `python -m app.backtest_forecast --holdout 6` |
-| Offline test suite (guardrails, graders, forecast metrics) | **55 tests** | `pytest` in `backend/` |
-| Frontend test suite | **19 tests** | `npx jest` in `frontend/` |
+| Metric                                                     | Result                                                          | Reproduce                                       |
+| ---------------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------- |
+| Golden-question eval pass rate                             | **12 / 12 (100%)** · CI-verified on a clean Odoo 18 seed | `python -m app.eval_harness`                  |
+| Forecast accuracy (6-month holdout, 4 categories pooled)   | **MAPE 12.8% · RMSE 8.2**                                | `python -m app.backtest_forecast --holdout 6` |
+| Offline test suite (guardrails, graders, forecast metrics) | **55 tests**                                              | `pytest` in `backend/`                      |
+| Frontend test suite                                        | **19 tests**                                              | `npx jest` in `frontend/`                   |
 
 **Forecasting is real, not decorative.** The MAPE/RMSE figures come from a true
 holdout backtest: for each product category the seasonal model is fit on all but
@@ -55,13 +55,17 @@ The agent chooses tools, calls Odoo or Postgres, explains the answer, and only w
 
 ```text
 Next.js chat UI
-  |
-  |  POST /chat/stream (SSE)   GET /chat/sessions/:id
-  |  POST /writebacks/:id/approve|reject
-  v
+  ^   |
+  |   |  POST /chat/stream  -->  SSE token stream back to the UI:
+  |   |      text_delta / tool_start / tool_result / done / error  (rendered live)
+  |   |  GET  /chat/sessions/:id
+  |   |  POST /writebacks/:id/approve|reject
+  |   v
 FastAPI agent service
   |
-  |-- Anthropic Messages API tool-calling loop
+  |-- Anthropic Messages API tool-calling loop (token-streamed)
+  |     `-- bounded error recovery: a failed or empty tool result is fed back
+  |         with a hint for ONE corrected retry; retries/recoveries show in trace
   |-- Odoo XML-RPC tools for record lookup and approved writes
   |-- Guarded SQL analytics against Odoo Postgres
   |-- Forecasting with pandas + statsmodels
@@ -75,6 +79,8 @@ Nginx reverse proxy (port 80/443)
 
 ## Highlights
 
+- **Token streaming:** the agent's reply streams to the chat UI token-by-token over SSE, alongside a live tool-call trace (`tool_start` / `tool_result`) — not a spinner that resolves to a wall of text.
+- **Bounded error recovery:** when a tool errors at runtime (e.g. SQL that parses but hits a bad column) or returns zero rows, the failure is fed back to the model with an actionable hint for **one** corrected retry; a second failure makes it explain the limitation instead of looping. Retries and recoveries are labelled in the trace.
 - **Human-approved writeback loop:** proposal tools create pending actions; the UI exposes Approve/Reject; only approval writes to Odoo.
 - **SQL guardrails:** single-statement `SELECT` only, table allowlist, read-only transaction, PostgreSQL statement timeout, and hard row cap.
 - **Schema grounding:** the system prompt includes a compact Odoo schema/business glossary so SQL uses real Odoo tables and fields.
@@ -87,37 +93,37 @@ Nginx reverse proxy (port 80/443)
 
 **Lookup and analytics (read-only):**
 
-| Tool | What it does |
-| ---- | ----------- |
-| `odoo_query` | Record lookup via Odoo XML-RPC; use for catalog/stock/order records |
-| `sql_analytics` | Free-form guarded SELECT — single statement, allowlisted tables, read-only transaction, row cap |
-| `search_partners` | `res.partner` lookup by name / email / ref without writing domain syntax; returns `is_customer` / `is_supplier` flags |
-| `forecast_demand` | Category-level monthly demand forecast (seasonal exponential smoothing via statsmodels) |
-| `simulate_discount_impact` | Read-only revenue + margin scenario for a proposed discount; never writes to Odoo |
-| `compare_periods` | Side-by-side period comparison (revenue / units / orders / margin / avg order value) by product, category, or customer; single conditional-aggregation query |
-| `stockout_risk` | Products at risk of running out ranked by urgency (`out_of_stock` → `critical` → `warning` → `watch`); uses avg daily sales velocity |
-| `inventory_aging` | Dead-stock scan — products with on-hand stock but no confirmed sale in N days, ranked by stock value at cost |
-| `margin_analysis` | Gross margin per product or category from confirmed sales; uses variant-level `standard_price` with template fallback |
-| `supplier_scorecard` | Supplier fill rate, total spend, avg expected lead time, and products sourced over a configurable window |
-| `customer_rfm` | RFM segmentation (champions / loyal / prospects / at_risk / lost) using NTILE tertiles; returns per-customer scores and segment summary |
+| Tool                         | What it does                                                                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `odoo_query`               | Record lookup via Odoo XML-RPC; use for catalog/stock/order records                                                                                          |
+| `sql_analytics`            | Free-form guarded SELECT — single statement, allowlisted tables, read-only transaction, row cap                                                             |
+| `search_partners`          | `res.partner` lookup by name / email / ref without writing domain syntax; returns `is_customer` / `is_supplier` flags                                  |
+| `forecast_demand`          | Category-level monthly demand forecast (seasonal exponential smoothing via statsmodels)                                                                      |
+| `simulate_discount_impact` | Read-only revenue + margin scenario for a proposed discount; never writes to Odoo                                                                            |
+| `compare_periods`          | Side-by-side period comparison (revenue / units / orders / margin / avg order value) by product, category, or customer; single conditional-aggregation query |
+| `stockout_risk`            | Products at risk of running out ranked by urgency (`out_of_stock` → `critical` → `warning` → `watch`); uses avg daily sales velocity              |
+| `inventory_aging`          | Dead-stock scan — products with on-hand stock but no confirmed sale in N days, ranked by stock value at cost                                                |
+| `margin_analysis`          | Gross margin per product or category from confirmed sales; uses variant-level`standard_price` with template fallback                                       |
+| `supplier_scorecard`       | Supplier fill rate, total spend, avg expected lead time, and products sourced over a configurable window                                                     |
+| `customer_rfm`             | RFM segmentation (champions / loyal / prospects / at_risk / lost) using NTILE tertiles; returns per-customer scores and segment summary                      |
 
 **Approval-gated write-back proposal tools:**
 
 Each `propose_*` tool creates a pending action for human review. Nothing is written to Odoo until the user clicks **Approve** in the UI.
 
-| Tool | Approval creates |
-| ---- | --------------- |
-| `propose_discount_rule` | `product.pricelist.item` discount rule |
-| `propose_restock_rule` | Manual `stock.warehouse.orderpoint` reorder rule |
-| `propose_purchase_order` | Confirmed `purchase.order` with lines |
-| `propose_invoice_reminder` | `mail.activity` follow-up on overdue invoices |
-| `propose_price_update` | Updated `list_price` on `product.template` |
-| `propose_pos_pricelist` | Updated pricelist on the Main Store `pos.config` |
-| `propose_email_campaign` | Draft `mailing.mailing` (never auto-sends) |
-| `propose_transfer_stock` | Internal `stock.picking` for warehouse staff to validate |
+| Tool                             | Approval creates                                                         |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `propose_discount_rule`        | `product.pricelist.item` discount rule                                 |
+| `propose_restock_rule`         | Manual`stock.warehouse.orderpoint` reorder rule                        |
+| `propose_purchase_order`       | Confirmed`purchase.order` with lines                                   |
+| `propose_invoice_reminder`     | `mail.activity` follow-up on overdue invoices                          |
+| `propose_price_update`         | Updated`list_price` on `product.template`                            |
+| `propose_pos_pricelist`        | Updated pricelist on the Main Store`pos.config`                        |
+| `propose_email_campaign`       | Draft`mailing.mailing` (never auto-sends)                              |
+| `propose_transfer_stock`       | Internal`stock.picking` for warehouse staff to validate                |
 | `propose_inventory_adjustment` | `stock.quant` physical count correction via `action_apply_inventory` |
-| `propose_vendor_price_update` | Updated (or created) `product.supplierinfo` price / lead time |
-| `propose_sale_order_cancel` | Cancellation of `sale.order` records in draft / sent / sale state |
+| `propose_vendor_price_update`  | Updated (or created)`product.supplierinfo` price / lead time           |
+| `propose_sale_order_cancel`    | Cancellation of`sale.order` records in draft / sent / sale state       |
 
 ## Tech Stack
 
@@ -135,17 +141,15 @@ Each `propose_*` tool creates a pending action for human review. Nothing is writ
    cp .env.example .env
    cp frontend/.env.example frontend/.env.local
    ```
-
 2. Set `ANTHROPIC_API_KEY` in `.env`.
 3. Start all services:
 
    ```bash
    docker compose up -d db odoo
    ```
-
 4. Open `http://localhost:8069`, create the `odoo_copilot` database, and install:
-   - Sales, Inventory, Invoicing, Purchase, Point of Sale, Email Marketing
 
+   - Sales, Inventory, Invoicing, Purchase, Point of Sale, Email Marketing
 5. Seed data and start the backend:
 
    ```bash
@@ -154,7 +158,6 @@ Each `propose_*` tool creates a pending action for human review. Nothing is writ
    python -m app.seed
    uvicorn app.main:app --reload --port 8001
    ```
-
 6. Start the frontend:
 
    ```bash
@@ -172,7 +175,6 @@ The full stack runs on a single VPS behind Nginx. Copy `.env.example` to `.env`,
    ```bash
    DEMO_MODE=true docker compose up -d --build
    ```
-
 2. Schedule the demo reset (wipes chat history, re-seeds Odoo every 6 hours):
 
    ```bash

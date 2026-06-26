@@ -11,6 +11,12 @@ from anthropic import Anthropic, AsyncAnthropic, BadRequestError
 
 from .config import config
 from .evidence import build_tool_evidence
+from .recovery import (
+    RecoveryTracker,
+    build_retry_hint,
+    empty_result_note,
+    is_empty_result,
+)
 from .schema_context import build_system_prompt
 from .session_store import (
     append_turn,
@@ -100,6 +106,7 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
     turn_tool_events: list[dict] = []
     forecast_data: dict | None = None
     persisted = False
+    tracker = RecoveryTracker()
 
     async def persist_turn(assistant_text: str, status: str = "done") -> None:
         nonlocal persisted
@@ -151,7 +158,16 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
                 if block.type != "tool_use":
                     continue
 
-                yield sse({"type": "tool_start", "name": block.name, "input": block.input})
+                start_attempt = tracker.attempt_number(block.name)
+                tool_start_event: dict = {
+                    "type": "tool_start",
+                    "name": block.name,
+                    "input": block.input,
+                }
+                if start_attempt > 1:
+                    tool_start_event["attempt"] = start_attempt
+                    tool_start_event["is_retry"] = True
+                yield sse(tool_start_event)
 
                 output_str = await asyncio.to_thread(run_tool, block.name, block.input)
                 try:
@@ -188,6 +204,23 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
                     summary=tool_summary,
                 )
 
+                # Bounded, visible error recovery: on failure feed an actionable
+                # hint back to the model (capped at one retry), nudge on empty
+                # results, and label retries / recoveries in the trace.
+                attempt = tracker.attempt_number(block.name)
+                recovered = False
+                if "error" in output:
+                    tracker.record_error(block.name)
+                    output["retry_guidance"] = build_retry_hint(
+                        block.name,
+                        str(output["error"]),
+                        exhausted=tracker.budget_exhausted(block.name),
+                    )
+                else:
+                    recovered = tracker.record_success(block.name)
+                    if is_empty_result(block.name, output):
+                        output["note"] = empty_result_note(block.name)
+
                 result_event: dict = {"type": "tool_result", "name": block.name}
                 persisted_tool_event: dict = {
                     "id": f"db-tool-{len(turn_tool_events) + 1}",
@@ -196,6 +229,14 @@ async def stream_chat(message: str, session_id: str) -> AsyncGenerator[str, None
                     "input": block.input,
                     "evidence": evidence,
                 }
+                if attempt > 1:
+                    result_event["attempt"] = attempt
+                    result_event["is_retry"] = True
+                    persisted_tool_event["attempt"] = attempt
+                    persisted_tool_event["is_retry"] = True
+                if recovered:
+                    result_event["recovered"] = True
+                    persisted_tool_event["recovered"] = True
                 if "error" in output:
                     result_event["error"] = output["error"]
                     persisted_tool_event["error"] = output["error"]

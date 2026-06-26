@@ -31,6 +31,11 @@ export type ToolEvent = {
   evidence?: ToolEvidence;
   writeback?: WritebackProposal;
   error?: string;
+  // Error-recovery loop: attempt is 1-based; isRetry marks a retry after a prior
+  // failure of the same tool; recovered marks a retry that then succeeded.
+  attempt?: number;
+  isRetry?: boolean;
+  recovered?: boolean;
 };
 
 export type PreviewChange = {

@@ -281,4 +281,50 @@ describe("chatReducer", () => {
     expect(state.isHydrating).toBe(true);
     expect(state.bannerMessage).toBeNull();
   });
+
+  it("error-recovery: an errored tool and its recovered retry are both reflected", () => {
+    let state = chatReducer(initialState, submitAction);
+
+    // First attempt: SQL that parses but errors at runtime.
+    state = chatReducer(state, {
+      type: "TOOL_START",
+      messageId: "asst-1",
+      toolEvent: { id: "te-1", name: "sql_analytics", input: { sql: "SELECT bad" } },
+    });
+    state = chatReducer(state, {
+      type: "TOOL_RESULT",
+      name: "sql_analytics",
+      messageId: "asst-1",
+      patch: { error: "column bad does not exist" },
+    });
+
+    // Second attempt: corrected query, marked as a retry that recovers.
+    state = chatReducer(state, {
+      type: "TOOL_START",
+      messageId: "asst-1",
+      toolEvent: {
+        id: "te-2",
+        name: "sql_analytics",
+        input: { sql: "SELECT good" },
+        attempt: 2,
+        isRetry: true,
+      },
+    });
+    state = chatReducer(state, {
+      type: "TOOL_RESULT",
+      name: "sql_analytics",
+      messageId: "asst-1",
+      patch: { rowCount: 3, recovered: true },
+    });
+
+    const events = state.messages[1].toolEvents;
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ status: "done", error: "column bad does not exist" });
+    expect(events[1]).toMatchObject({
+      status: "done",
+      attempt: 2,
+      isRetry: true,
+      recovered: true,
+    });
+  });
 });

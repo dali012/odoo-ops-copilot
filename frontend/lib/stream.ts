@@ -40,6 +40,9 @@ export async function readStream(
               id: crypto.randomUUID(),
               name: event.name as ToolEvent["name"],
               input: (event.input as Record<string, unknown>) ?? {},
+              attempt:
+                typeof event.attempt === "number" ? event.attempt : undefined,
+              isRetry: event.is_retry === true,
             };
             dispatch({ type: "TOOL_START", toolEvent, messageId });
             break;
@@ -52,6 +55,15 @@ export async function readStream(
             }
             if (typeof event.error === "string") {
               patch.error = event.error;
+            }
+            if (typeof event.attempt === "number") {
+              patch.attempt = event.attempt;
+            }
+            if (event.is_retry === true) {
+              patch.isRetry = true;
+            }
+            if (event.recovered === true) {
+              patch.recovered = true;
             }
             if (event.name === "sql_analytics") {
               patch.sql = event.sql as string | undefined;
