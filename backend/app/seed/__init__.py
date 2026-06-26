@@ -23,8 +23,11 @@ from .marketing import seed_marketing
 from .pos import seed_pos
 from .purchase import seed_purchase
 from .sales import seed_sales
+from .stock_levels import seed_stockout_signal
 
-PHASE_ORDER = ["catalog", "sales", "purchase", "invoicing", "pos", "marketing"]
+# stockout runs last: it zeroes one product's on-hand stock, and must do so
+# after every phase that creates or consumes inventory (purchase, pos).
+PHASE_ORDER = ["catalog", "sales", "purchase", "invoicing", "pos", "marketing", "stockout"]
 # Phases that need catalog output (product_ids, customer_ids)
 _CATALOG_CONSUMERS = {"sales", "purchase", "pos"}
 
@@ -64,6 +67,10 @@ def seed(phase: str | None = None) -> None:
     if "marketing" in phases:
         print("[seed] Running phase: marketing")
         seed_marketing()
+
+    if "stockout" in phases:
+        print("[seed] Running phase: stockout")
+        seed_stockout_signal()
 
     print("[seed] Done.")
 
