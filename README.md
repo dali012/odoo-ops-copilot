@@ -234,6 +234,14 @@ The agent can suggest operational changes, but it does not directly write to Odo
 
 On public deployments, set `DEMO_MODE=true` to return `403 Forbidden` on all approve/reject calls, so no visitor can mutate the demo Odoo instance.
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev
+setup, the checks CI runs, and the live Odoo 18 test requirement. Because the
+project is dual-licensed (below), contributors agree to a one-time
+[Contributor License Agreement](CLA.md) so contributions can ship in both the
+AGPL and commercial editions.
+
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3.0** — see [LICENSE](LICENSE).
