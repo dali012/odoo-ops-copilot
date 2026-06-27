@@ -234,6 +234,8 @@ The agent can suggest operational changes, but it does not directly write to Odo
 
 On public deployments, set `DEMO_MODE=true` to return `403 Forbidden` on all approve/reject calls, so no visitor can mutate the demo Odoo instance.
 
+For the full threat model — including how the SQL guardrails defeat prompt-injection (SELECT-only parser + table allowlist + read-only transaction as independent layers) — see [SECURITY.md](SECURITY.md).
+
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev
