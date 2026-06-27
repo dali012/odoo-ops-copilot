@@ -278,7 +278,11 @@ class TestExecutePosPricelist(unittest.TestCase):
         self.assertEqual(result["odoo_record_ids"], [33])
         self.assertEqual(result["applied_pricelist"], "Summer Sale")
         odoo_mock.execute.assert_called_once_with(
-            "pos.config", "write", [33], {"pricelist_id": 88, "use_pricelist": True}
+            "pos.config", "write", [33], {
+                "available_pricelist_ids": [(4, 88)],
+                "pricelist_id": 88,
+                "use_pricelist": True,
+            }
         )
 
     @patch("app.writeback._first_id")

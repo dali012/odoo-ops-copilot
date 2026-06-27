@@ -362,7 +362,10 @@ def execute_pos_pricelist(payload: dict[str, Any]) -> dict[str, Any]:
         label="POS config 'Main Store'",
     )
 
+    # Odoo 18 constrains the default pricelist to be one of the available
+    # pricelists, so link it into available_pricelist_ids in the same write.
     odoo.execute("pos.config", "write", [config_id], {
+        "available_pricelist_ids": [(4, pricelist_id)],
         "pricelist_id": pricelist_id,
         "use_pricelist": True,
     })
